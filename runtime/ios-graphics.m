@@ -263,6 +263,7 @@ static void rdd_present_frame(CGImageRef frame){@autoreleasepool{
 void rdd_vibrate(int64_t milliseconds){if(milliseconds<=0)return;dispatch_async(dispatch_get_main_queue(),^{UIImpactFeedbackGenerator *feedback=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];[feedback impactOccurred];});}
 
 extern void rdd_run_game(void);
+extern int rdd_save_apk_icon(const char *apk,const char *out);
 #include <pthread.h>
 static pthread_mutex_t touchMutex=PTHREAD_MUTEX_INITIALIZER;
 static int32_t touchQueue[256][4];static unsigned touchRead,touchWrite;static bool touching;
@@ -310,6 +311,11 @@ static NSString *RDDSHA256OfFile(NSString *path){
  free(buffer);[in close];if(n<0)return nil;unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256_Final(digest,&ctx);
  NSMutableString *hex=[NSMutableString string];for(int i=0;i<CC_SHA256_DIGEST_LENGTH;i++)[hex appendFormat:@"%02x",digest[i]];return hex;
 }
+/// Documents/runtime-data/icon.png: the game's launcher icon, copied out of the player's APK.
+/// iOS only lets an app switch to icons signed into its bundle, so `build.py device` reads this
+/// file off the phone and builds it into the next (weekly) install instead.
+static NSString *RDDAPKIconPath(void){return [RDDInstalledAPKPath().stringByDeletingLastPathComponent stringByAppendingPathComponent:@"icon.png"];}
+static void RDDSaveAPKIcon(void){if(![NSFileManager.defaultManager fileExistsAtPath:RDDAPKIconPath()])rdd_save_apk_icon(RDDInstalledAPKPath().fileSystemRepresentation,RDDAPKIconPath().fileSystemRepresentation);}
 static BOOL RDDInstalledAPKIsValid(void){
  NSString *path=RDDInstalledAPKPath();if(![NSFileManager.defaultManager fileExistsAtPath:path])return NO;
  NSString *marker=[path stringByAppendingString:@".verified"];NSDictionary *a=[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
@@ -330,7 +336,7 @@ static NSString *RDDImportAPK(NSURL *url){
   [fm createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
   NSString *temp=[path stringByAppendingString:@".importing"];[fm removeItemAtPath:temp error:nil];
   if(![fm copyItemAtPath:url.path toPath:temp error:&e])result=[NSString stringWithFormat:@"Copy failed: %@",e.localizedDescription];
-  else{[fm removeItemAtPath:path error:nil];[fm moveItemAtPath:temp toPath:path error:nil];[fm removeItemAtPath:[path stringByAppendingString:@".verified"] error:nil];if(!RDDInstalledAPKIsValid())result=@"The copied file failed verification. Please try again.";}
+  else{[fm removeItemAtPath:path error:nil];[fm moveItemAtPath:temp toPath:path error:nil];[fm removeItemAtPath:[path stringByAppendingString:@".verified"] error:nil];[fm removeItemAtPath:RDDAPKIconPath() error:nil];if(!RDDInstalledAPKIsValid())result=@"The copied file failed verification. Please try again.";else RDDSaveAPKIcon();}
  }
  if(scoped)[url stopAccessingSecurityScopedResource];
  fprintf(stderr,"apk import from %s: %s\n",url.lastPathComponent.UTF8String,result?result.UTF8String:"ok");
@@ -503,7 +509,7 @@ static BOOL RDDLooksLikeAPK(NSURLResponse *r){
  if(RDDInstalledAPKIsValid()){[self startGame];}else{RDDImportController *import=[RDDImportController new];import.delegate=self;self.window.rootViewController=import;}
  [self.window makeKeyAndVisible];return YES;
 }
-- (void)startGame{if(gameStarted)return;gameStarted=YES;self.window.rootViewController=[RDDGameController new];RDDStartTouchScript();dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{@autoreleasepool{rdd_run_game();}});}
+- (void)startGame{if(gameStarted)return;gameStarted=YES;self.window.rootViewController=[RDDGameController new];RDDStartTouchScript();dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{@autoreleasepool{RDDSaveAPKIcon();rdd_run_game();}});}
 // "Open in 9 Innings", AirDrop and the share sheet deliver the APK here.
 - (BOOL)application:(UIApplication*)app openURL:(NSURL*)url options:(NSDictionary*)options{
  if(gameStarted)return NO;NSString *error=RDDImportAPK(url);

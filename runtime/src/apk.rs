@@ -57,6 +57,14 @@ impl<'a> Apk<'a> {
         }
     }
 
+    /// The game's own launcher icon (the largest `res/drawable-*dpi/icon.png`), as PNG bytes.
+    pub fn icon(&self) -> Result<Vec<u8>, String> {
+        let e = self.entries.iter()
+            .filter(|e| e.name.starts_with("res/drawable-") && e.name.ends_with("dpi/icon.png"))
+            .max_by_key(|e| e.size).ok_or("APK has no launcher icon")?;
+        self.read(&e.name.clone())
+    }
+
     /// `name \t data_offset \t length` for stored game resources, as the engine
     /// opens them through file descriptors into the APK.
     pub fn asset_table(&self) -> String {

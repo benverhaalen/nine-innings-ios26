@@ -12,6 +12,14 @@
           "page": "https://www.apkmirror.com/apk/com2us/9-innings-2015/9-innings-2015-6-0-7-release/9-innings-2015-6-0-7-android-apk-download/",
           "verified": "2026-10-25: SHA-256 and size match"
         }
+      ],
+      "icon_sources": [
+        {
+          "name": "APKPure image CDN (as shown on APKFab)",
+          "url": "https://image.winudf.com/v2/image/Y29tLmNvbTJ1cy5uaXBiMjAxMy5ub3JtYWwuZnJlZWZ1bGwuZ29vZ2xlLmdsb2JhbC5hbmRyb2lkLmNvbW1vbl9pY29uXzBfMjY4NDgyNzA/icon.png?fakeurl=1",
+          "note": "512 px store icon. Builds download it at build time and check it by its 8x8 average-hash fingerprint (the host re-encodes it, so SHA-256 changes); it is never stored in this repo.",
+          "fingerprint": "347e1f0f0e066460"
+        }
       ]
     }
   ]

@@ -105,29 +105,83 @@ def apk_icon(apk, out):
         name = max((n for n in z.namelist() if re.fullmatch(r"res/drawable-\w*dpi/icon\.png", n)), key=lambda n: z.getinfo(n).file_size)
         src = out / "apk-icon.png"
         src.write_bytes(z.read(name))
+    return crop_apk_icon(src)
+
+
+def crop_apk_icon(src):
     run(["sips", "-c", "92", "92", str(src)], capture_output=True)
     return src
 
 
-def assemble(executable, bundle_id, platform, apk=None, icon_apk=None, icon=None):
+def installed_icon(fetch, out):
+    """The icon the app saved from the player's APK (Documents/runtime-data/icon.png) on an earlier install,
+    so a rebuild shows the game's icon without the APK or any art living on this Mac or in the repo."""
+    src = out / "apk-icon.png"
+    src.unlink(missing_ok=True)
+    try:
+        fetch(src)
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    if not src.exists():
+        return None
+    print("Using the game icon saved on the device from your APK.")
+    return crop_apk_icon(src)
+
+
+def icon_fingerprint(png):
+    """64-bit average hash: brighter-than-mean bits of the image scaled to 8×8 (via sips, so no imaging library is needed)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bmp = Path(tmp) / "icon.bmp"
+        subprocess.run(["sips", "-s", "format", "bmp", "-z", "8", "8", str(png), "--out", str(bmp)], check=True, capture_output=True)
+        b = bmp.read_bytes()
+    offset, width, height, bpp = int.from_bytes(b[10:14], "little"), int.from_bytes(b[18:22], "little", signed=True), int.from_bytes(b[22:26], "little", signed=True), int.from_bytes(b[28:30], "little")
+    row = (width * bpp // 8 + 3) & ~3
+    gray = [sum(b[offset + y * row + x * bpp // 8 + c] for c in range(3)) for y in range(abs(height)) for x in range(width)]
+    mean = sum(gray) / len(gray)
+    return sum(1 << i for i, v in enumerate(gray) if v > mean)
+
+
+def store_icon(out):
+    """The game's 512 px store icon, downloaded at build time from a public image host (never stored in this repo).
+    Hosts re-encode the image on each request, so it's checked by its 8×8 fingerprint rather than by SHA-256:
+    the store icon and the APK's own icon match within a bit or two, unrelated art differs by 20+."""
+    for source in (s for apk in SUPPORTED for s in apk.get("icon_sources", [])):
+        dest = out / "store-icon.png"
+        try:
+            run(["curl", "-fsSL", "--max-time", "30", "-o", str(dest), source["url"]], capture_output=True)
+            distance = bin(icon_fingerprint(dest) ^ int(source["fingerprint"], 16)).count("1")
+        except (subprocess.CalledProcessError, OSError, ValueError):
+            continue
+        if distance <= 6:
+            print(f"Using the game icon from {source['name']}.")
+            # Drop the alpha channel (its slightly rounded corners fall inside the iOS icon mask anyway).
+            flat = out / "store-icon.jpg"
+            run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "100", str(dest), "--out", str(flat)], capture_output=True)
+            return flat
+    return None
+
+
+def assemble(executable, bundle_id, platform, apk=None, icon_apk=None, icon=None, saved_icon=None, require_icon=False):
     app = BUILD / platform / f"{APP_NAME}.app"
     shutil.rmtree(app, ignore_errors=True)
     app.mkdir(parents=True)
     shutil.copy2(executable, app / APP_NAME)
     shutil.copytree(ROOT / "resources" / "fonts", app / "fonts", ignore=shutil.ignore_patterns("NOTICE"))
-    icons = ROOT / "resources" / "icon"
-    original = Path(icon).expanduser() if icon else apk_icon(icon_apk or apk, app.parent) if (icon_apk or apk) else None
-    for name, size in [("AppIcon60x60@2x.png", 120), ("AppIcon60x60@3x.png", 180), ("AppIcon76x76@2x~ipad.png", 152), ("AppIcon76x76~ipad.png", 76)]:
-        if original:
-            run(["sips", "-z", str(size), str(size), str(original), "--out", str(app / name)], capture_output=True)
-        else:
-            shutil.copy2(icons / f"AppIcon-{size}.png", app / name)
+    # Icon: --icon, else the store icon, else the APK's own (from --apk/--icon-from or saved on the device by an earlier install).
+    original = (Path(icon).expanduser() if icon else store_icon(app.parent)
+                or (apk_icon(icon_apk or apk, app.parent) if (icon_apk or apk) else saved_icon and installed_icon(saved_icon, app.parent)))
+    if not original and require_icon:
+        sys.exit("Couldn't download the game icon from any icon_sources entry in supported-apks.json; not building a release without it.")
+    if not original:
+        print("warning: no game icon available (icon host unreachable); this build has no icon until the next rebuild.")
+    for name, size in [("AppIcon60x60@2x.png", 120), ("AppIcon60x60@3x.png", 180), ("AppIcon76x76@2x~ipad.png", 152), ("AppIcon76x76~ipad.png", 76)] if original else []:
+        run(["sips", "-s", "format", "png", "-z", str(size), str(size), str(original), "--out", str(app / name)], capture_output=True)
     (app / "Info.plist").write_bytes(plistlib.dumps(info_plist(bundle_id, platform)))
     (app / "PkgInfo").write_text("APPL????")
     (app / "supported-apks.json").write_text((ROOT / "supported-apks.json").read_text())
     if apk:
         shutil.copy2(apk, app / "original.apk")  # adopted into Documents on first launch
-    elif not (icon_apk or icon):
+    else:
         audit(app)
     return app
 
@@ -189,7 +243,7 @@ def devices():
 
 def cmd_ipa(a):
     apk = resolve_apk(a)
-    app = assemble(cargo("aarch64-apple-ios"), a.bundle_id or "io.github.nineinnings.ios26", "iPhoneOS", apk)
+    app = assemble(cargo("aarch64-apple-ios"), a.bundle_id or "io.github.nineinnings.ios26", "iPhoneOS", apk, require_icon=True)
     run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(app)])  # ad-hoc; sideloading tools re-sign
     DIST.mkdir(exist_ok=True)
     ipa = DIST / ("NineInnings26-personal.ipa" if apk else "NineInnings26.ipa")
@@ -216,7 +270,9 @@ def cmd_device(a):
     chosen = next((d for d in found if a.device in (d["identifier"], d["hardwareProperties"].get("udid"))), None) if a.device else (found[0] if found else None)
     if not chosen:
         sys.exit("No iPhone found. Connect it with a cable, unlock it and tap 'Trust This Computer'.")
-    app = assemble(cargo("aarch64-apple-ios"), bundle_id, "iPhoneOS", apk, a.icon_from and check_apk(a.icon_from), a.icon)
+    saved_icon = lambda dest: run(["xcrun", "devicectl", "device", "copy", "from", "--device", chosen["identifier"], "--domain-type", "appDataContainer",
+                                   "--domain-identifier", bundle_id, "--source", "Documents/runtime-data/icon.png", "--destination", str(dest)], capture_output=True)
+    app = assemble(cargo("aarch64-apple-ios"), bundle_id, "iPhoneOS", apk, a.icon_from and check_apk(a.icon_from), a.icon, saved_icon)
     profile, entitlements = provision(team, bundle_id, chosen["hardwareProperties"]["udid"])
     shutil.copy2(profile, app / "embedded.mobileprovision")
     run(["codesign", "--force", "--sign", signing_identity(team), "--entitlements", str(entitlements), "--timestamp=none", "--generate-entitlement-der", str(app)])
@@ -231,7 +287,10 @@ def cmd_device(a):
 def cmd_simulator(a):
     apk = resolve_apk(a)
     bundle_id = a.bundle_id or "io.github.nineinnings.ios26"
-    app = assemble(cargo("aarch64-apple-ios-sim"), bundle_id, "iPhoneSimulator", apk, a.icon_from and check_apk(a.icon_from), a.icon)
+    def saved_icon(dest):
+        container = out(["xcrun", "simctl", "get_app_container", "booted", bundle_id, "data"])
+        shutil.copy2(Path(container.strip()) / "Documents/runtime-data/icon.png", dest)
+    app = assemble(cargo("aarch64-apple-ios-sim"), bundle_id, "iPhoneSimulator", apk, a.icon_from and check_apk(a.icon_from), a.icon, saved_icon)
     run(["codesign", "--force", "--sign", "-", str(app)])
     run(["xcrun", "simctl", "install", "booted", str(app)])
     run(["xcrun", "simctl", "launch", "booted", bundle_id])

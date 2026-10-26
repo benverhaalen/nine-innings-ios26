@@ -9,7 +9,9 @@ from pathlib import Path
 REPO = "benverhaalen/nine-innings-ios26"
 RAW = f"https://raw.githubusercontent.com/{REPO}/main"
 ipa = Path(sys.argv[1])
-version = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+root = Path(__file__).resolve().parent.parent
+version = (root / "VERSION").read_text().strip()
+icon = json.loads((root / "supported-apks.json").read_text())["apks"][0]["icon_sources"][0]["url"]
 print(json.dumps({
     "name": "9 Innings 2016 for iPhone",
     "identifier": "io.github.nineinnings.ios26.source",
@@ -22,8 +24,8 @@ print(json.dumps({
         "subtitle": "The original 2016 baseball game, on iPhone.",
         "localizedDescription": "Runs the original Android game 9 Innings: Pro Baseball 2016 (v6.0.7). "
                                 "On first launch it downloads the game from a public mirror and verifies it; then it plays offline. "
-                                "Contains no game files. Not affiliated with Com2uS.",
-        "iconURL": f"{RAW}/resources/icon/AppIcon-1024.png",
+                                "Contains no game files apart from its icon. Not affiliated with Com2uS.",
+        "iconURL": icon,
         "tintColor": "0D1729",
         "screenshotURLs": [f"{RAW}/docs/screenshots/{n}.png" for n in ["title", "main-menu", "at-bat", "pitch"]],
         "versions": [{

@@ -37,5 +37,6 @@ Send the user to the latest release's `NineInnings26.ipa` and the README's *Side
 ## Rules
 
 - Never add game content to the repo or to release assets: no APK, `libgame.so`, DEX, resources, extracted tables, art, or code translated from the game's bytecode. `build.py` audits IPAs built without `--apk`.
+  - The one exception is the app icon. `build.py` downloads it at build time from `icon_sources` in `supported-apks.json` and checks its fingerprint, so it lands in built IPAs but never in the repo. There is no placeholder icon.
   - Anything game-specific is derived at runtime from the user's APK (`runtime/src/apk.rs`, `runtime/src/dalvik.rs`).
 - Keep `supported-apks.json` hashes exact. Only add a mirror after verifying that its file's SHA-256 matches.
