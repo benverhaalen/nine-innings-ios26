@@ -11,7 +11,7 @@ It isn't a remake: the app runs the game's own engine in an ARM interpreter, so 
 
 *Real screenshots from this app (iOS simulator), not promotional art.*
 
-> **No game files are in this repo or in the app download.** On first launch the app opens a public mirror of the original APK. You tap the site's Download button and the app checks the file's SHA-256 against `supported-apks.json`. From then on it plays offline.
+> **No game files are in this repo or in the app download.** On first launch the app downloads the original APK from a public mirror by itself and checks the file's SHA-256 against `supported-apks.json`. From then on it plays offline.
 >
 > ![First launch](docs/screenshots/first-launch.png)
 
@@ -64,7 +64,7 @@ Don't have SideStore yet? [iloader](https://github.com/nab138/iloader) (2.4.0 or
 
 ## First launch
 
-- **Download game** opens APKMirror inside the app. Tap the site's download button; the game installs itself when the download finishes (about 58 MB, once).
+- **Download game** fetches the APK from APKMirror by itself (about 58 MB, once) and installs the game. You don't see or tap anything on the website; ads and trackers are blocked.
 - **I already have the APK file** lets you pick a `.apk` from Files. You can also AirDrop or share it to the app, or copy it into the app's folder with Finder (iPhone → Files → 9 Innings).
 - Only the exact file is accepted: v6.0.7, SHA-256 `50b1cd98…df9221`.
 
@@ -84,7 +84,7 @@ Don't have SideStore yet? [iloader](https://github.com/nab138/iloader) (2.4.0 or
 | The app stopped opening after a week | The free 7-day signature expired. Run `build.py device` again, or refresh in SideStore/AltStore. Your save stays. |
 | Sideloading tool rejects your Apple ID login (since Oct 2026) | Update to Impactor 2.7.2+ / iloader 2.4.0+, or use the Mac route, which signs through Xcode. |
 | "This isn't the supported APK" | The file isn't v6.0.7 (`com.com2us.nipb2013…`, 60,322,552 bytes). Use **Download game**, or get that exact file. |
-| Download page looks different or the button is missing | Mirrors change their pages. Scroll to the APK download button. If the mirror is gone, use **I already have the APK file** and [open an issue](../../issues). |
+| The mirror's page appears after "Getting the game…" | The automatic download didn't start within 45 s (the site may have changed). Tap the APK download button on the page. If the mirror is gone, use **I already have the APK file** and [open an issue](../../issues). |
 | `build.py doctor` shows FIX lines | Do what each line says, then rerun. |
 
 ## For developers

@@ -362,7 +362,24 @@ static NSArray<NSDictionary*> *RDDDownloadSources(void){
 @property(copy,nonatomic) void(^completion)(NSString *error);
 @property(copy,nonatomic) NSURL *page;
 @end
-@implementation RDDDownloadController{WKWebView *web;UIProgressView *bar;UILabel *banner;NSURL *destination;WKDownload *active;}
+// Content-blocker rules (the format Safari content blockers use; url-filter has no | alternation): drop ad/tracker requests and hide ad slots,
+// so the mirror page is just the download button if it ever has to be shown.
+static NSString *const RDDAdBlockRules=@"["
+ "{\"trigger\":{\"url-filter\":\".*\",\"if-domain\":[\"*doubleclick.net\",\"*googlesyndication.com\",\"*googletagservices.com\",\"*googletagmanager.com\",\"*google-analytics.com\",\"*adservice.google.com\",\"*amazon-adsystem.com\",\"*taboola.com\",\"*outbrain.com\",\"*criteo.com\",\"*criteo.net\",\"*adnxs.com\",\"*pubmatic.com\",\"*rubiconproject.com\",\"*openx.net\",\"*casalemedia.com\",\"*moatads.com\",\"*quantserve.com\",\"*scorecardresearch.com\",\"*media.net\",\"*sharethrough.com\",\"*33across.com\",\"*sovrn.com\",\"*lijit.com\",\"*indexww.com\",\"*adsafeprotected.com\",\"*doubleverify.com\",\"*facebook.net\",\"*hotjar.com\",\"*onesignal.com\"]},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"doubleclick\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"googlesyndication\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"adservice\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"amazon-adsystem\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"taboola\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"outbrain\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"pagead\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\"prebid\"},\"action\":{\"type\":\"block\"}},"
+ "{\"trigger\":{\"url-filter\":\".*\"},\"action\":{\"type\":\"css-display-none\",\"selector\":\"ins.adsbygoogle,[id^=div-gpt-ad],[id^=google_ads],[class*=ad-container],[class*=ad-slot],[class*=google-ad],[class*=ai-viewport],.ezoic-ad,[id^=ezoic],iframe[src*=ads],#ad-banner,.adsbox,.sticky-ad,[class*=sticky-footer-ad],[class*=OUTBRAIN],[id*=taboola]\"}}"
+ "]";
+// Presses the mirror's own download buttons: the release page's "Download APK" button, then the
+// "click here" link on the page that hands out the file.
+static NSString *const RDDPressDownloadJS=@"(function(){var a=document.querySelector('#download-link')||document.querySelector('a.downloadButton')||document.querySelector('a[href*=\"download.php\"]')||document.querySelector('a[href*=\"/download/?key=\"]');if(a){a.removeAttribute('target');a.click();return a.href}return 'none: '+document.title})()";
+@implementation RDDDownloadController{WKWebView *web;UIProgressView *bar;UILabel *banner;NSURL *destination;WKDownload *active;UIView *cover;UILabel *coverText;UIProgressView *coverBar;BOOL revealed;}
 - (void)viewDidLoad{[super viewDidLoad];self.view.backgroundColor=UIColor.systemBackgroundColor;
  WKWebViewConfiguration *config=[WKWebViewConfiguration new];config.websiteDataStore=WKWebsiteDataStore.nonPersistentDataStore;
  web=[[WKWebView alloc] initWithFrame:CGRectZero configuration:config];web.navigationDelegate=self;web.UIDelegate=self;web.allowsBackForwardNavigationGestures=YES;
@@ -370,20 +387,35 @@ static NSArray<NSDictionary*> *RDDDownloadSources(void){
  banner=[UILabel new];banner.text=@"Tap the site's Download button for the APK — the game installs itself when the download finishes.";banner.numberOfLines=0;banner.font=[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];banner.textAlignment=NSTextAlignmentCenter;banner.backgroundColor=[UIColor colorWithRed:0.05 green:0.09 blue:0.16 alpha:1];banner.textColor=UIColor.whiteColor;
  UIButton *close=[UIButton buttonWithType:UIButtonTypeClose];[close addTarget:self action:@selector(cancel) forControlEvents:UIControlEventTouchUpInside];
  bar=[[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleBar];bar.hidden=YES;
- for(UIView *v in @[web,banner,close,bar]){v.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:v];}
+ // The page loads behind this native screen; it is only revealed if pressing the buttons automatically fails.
+ cover=[UIView new];cover.backgroundColor=[UIColor colorWithRed:0.05 green:0.09 blue:0.16 alpha:1];
+ coverText=[UILabel new];coverText.text=@"Getting the game…";coverText.textColor=UIColor.whiteColor;coverText.font=[UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];coverText.textAlignment=NSTextAlignmentCenter;coverText.numberOfLines=0;
+ UIActivityIndicatorView *spin=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];spin.color=UIColor.whiteColor;[spin startAnimating];
+ coverBar=[[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];coverBar.hidden=YES;
+ UIButton *coverClose=[UIButton buttonWithType:UIButtonTypeSystem];[coverClose setTitle:@"Cancel" forState:UIControlStateNormal];[coverClose addTarget:self action:@selector(cancel) forControlEvents:UIControlEventTouchUpInside];
+ UIStackView *coverStack=[[UIStackView alloc] initWithArrangedSubviews:@[spin,coverText,coverBar,coverClose]];coverStack.axis=UILayoutConstraintAxisVertical;coverStack.alignment=UIStackViewAlignmentCenter;coverStack.spacing=18;coverStack.translatesAutoresizingMaskIntoConstraints=NO;[cover addSubview:coverStack];
+ for(UIView *v in @[web,banner,close,bar,cover]){v.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:v];}
  UILayoutGuide *g=self.view.safeAreaLayoutGuide;
  [NSLayoutConstraint activateConstraints:@[
   [banner.topAnchor constraintEqualToAnchor:g.topAnchor],[banner.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],[banner.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-8],[banner.heightAnchor constraintGreaterThanOrEqualToConstant:40],
   [close.centerYAnchor constraintEqualToAnchor:banner.centerYAnchor],[close.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-8],
   [bar.topAnchor constraintEqualToAnchor:banner.bottomAnchor],[bar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],[bar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-  [web.topAnchor constraintEqualToAnchor:bar.bottomAnchor],[web.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],[web.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],[web.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]]];
- [web loadRequest:[NSURLRequest requestWithURL:self.page]];
+  [web.topAnchor constraintEqualToAnchor:bar.bottomAnchor],[web.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],[web.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],[web.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+  [cover.topAnchor constraintEqualToAnchor:self.view.topAnchor],[cover.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],[cover.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],[cover.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+  [coverStack.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],[coverStack.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor],[coverBar.widthAnchor constraintEqualToConstant:280]]];
+ [WKContentRuleListStore.defaultStore compileContentRuleListForIdentifier:@"rdd-adblock" encodedContentRuleList:RDDAdBlockRules completionHandler:^(WKContentRuleList *list,NSError *e){
+  if(list)[config.userContentController addContentRuleList:list];else fprintf(stderr,"ad block rules failed: %s\n",e.localizedDescription.UTF8String);
+  [self->web loadRequest:[NSURLRequest requestWithURL:self.page]];}];
+ // Give the automatic path 45 s to start the file; after that show the (ad-free) page so the user can tap.
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW,45*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(!self->active&&!self->destination)[self reveal];});
 }
+- (void)reveal{if(revealed)return;revealed=YES;fprintf(stderr,"download page revealed for a manual tap\n");[UIView animateWithDuration:0.25 animations:^{self->cover.alpha=0;} completion:^(BOOL f){self->cover.hidden=YES;}];}
 - (void)cancel{[self dismissViewControllerAnimated:YES completion:nil];}
-// Test hook (RDD_AUTOTEST_DOWNLOAD=1, e.g. via SIMCTL_CHILD_): press the mirror's own download links.
 - (void)webView:(WKWebView*)w didFinishNavigation:(WKNavigation*)n{fprintf(stderr,"download page: %s\n",w.URL.absoluteString.UTF8String);
- if(!getenv("RDD_AUTOTEST_DOWNLOAD"))return;
- dispatch_after(dispatch_time(DISPATCH_TIME_NOW,4*NSEC_PER_SEC),dispatch_get_main_queue(),^{[w evaluateJavaScript:@"(function(){var a=document.querySelector('#download-link')||document.querySelector('a.downloadButton');if(a){a.click();return a.href}return 'none: '+document.title})()" completionHandler:^(id r,NSError *e){fprintf(stderr,"autotest click: %s\n",[[r description]?:e.localizedDescription UTF8String]);}];});
+ // Pages can finish loading before their buttons exist (Cloudflare checks, late scripts), so retry a few times.
+ for(int i=1;i<=4;i++)dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(i*2.5*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+  if(self->active||self->destination||self->revealed||w.isLoading)return;
+  [w evaluateJavaScript:RDDPressDownloadJS completionHandler:^(id r,NSError *e){fprintf(stderr,"auto download press: %s\n",[[r description]?:e.localizedDescription UTF8String]);}];});
 }
 static BOOL RDDLooksLikeAPK(NSURLResponse *r){
  NSString *name=r.suggestedFilename.lowercaseString;NSString *type=r.MIMEType.lowercaseString;
@@ -400,19 +432,19 @@ static BOOL RDDLooksLikeAPK(NSURLResponse *r){
 - (void)webView:(WKWebView*)w navigationResponse:(WKNavigationResponse*)r didBecomeDownload:(WKDownload*)d{d.delegate=self;[self track:d];}
 - (void)webView:(WKWebView*)w navigationAction:(WKNavigationAction*)a didBecomeDownload:(WKDownload*)d{d.delegate=self;[self track:d];}
 // Mirrors often auto-start the file while the user also taps; keep only the first download.
-- (void)track:(WKDownload*)d{if(active&&active!=d){fprintf(stderr,"duplicate download cancelled\n");[d cancel:nil];return;}active=d;fprintf(stderr,"download started: %s\n",d.originalRequest.URL.absoluteString.UTF8String);bar.hidden=NO;bar.observedProgress=d.progress;banner.text=@"Downloading the game…";}
+- (void)track:(WKDownload*)d{if(active&&active!=d){fprintf(stderr,"duplicate download cancelled\n");[d cancel:nil];return;}active=d;fprintf(stderr,"download started: %s\n",d.originalRequest.URL.absoluteString.UTF8String);bar.hidden=NO;bar.observedProgress=d.progress;banner.text=@"Downloading the game…";coverBar.hidden=NO;coverBar.observedProgress=d.progress;coverText.text=@"Downloading the game (58 MB)…";}
 - (void)download:(WKDownload*)d decideDestinationUsingResponse:(NSURLResponse*)r suggestedFilename:(NSString*)name completionHandler:(void(^)(NSURL*))h{
  if(d!=active){h(nil);return;}
  destination=[NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.apk",NSUUID.UUID.UUIDString]]];h(destination);
 }
-- (void)downloadDidFinish:(WKDownload*)d{if(d!=active)return;active=nil;banner.text=@"Checking the download…";NSURL *file=destination;
+- (void)downloadDidFinish:(WKDownload*)d{if(d!=active)return;active=nil;banner.text=@"Checking the download…";coverText.text=@"Checking the download…";NSURL *file=destination;
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSString *error=RDDImportAPK(file);[NSFileManager.defaultManager removeItemAtURL:file error:nil];
   dispatch_async(dispatch_get_main_queue(),^{
    if(!error){[self dismissViewControllerAnimated:YES completion:^{if(self.completion)self.completion(nil);}];}
-   else{self->bar.hidden=YES;self->banner.text=[@"That download wasn't the right file. " stringByAppendingString:error];}
+   else{self->bar.hidden=YES;self->banner.text=[@"That download wasn't the right file. " stringByAppendingString:error];self->destination=nil;[self reveal];}
   });});
 }
-- (void)download:(WKDownload*)d didFailWithError:(NSError*)e resumeData:(NSData*)r{if(d!=active)return;active=nil;fprintf(stderr,"download failed: %s\n",e.localizedDescription.UTF8String);bar.hidden=YES;banner.text=[NSString stringWithFormat:@"Download failed: %@. Try again.",e.localizedDescription];}
+- (void)download:(WKDownload*)d didFailWithError:(NSError*)e resumeData:(NSData*)r{if(d!=active)return;active=nil;fprintf(stderr,"download failed: %s\n",e.localizedDescription.UTF8String);bar.hidden=YES;banner.text=[NSString stringWithFormat:@"Download failed: %@. Try again.",e.localizedDescription];destination=nil;[self reveal];}
 @end
 @protocol RDDImportDelegate<NSObject>
 - (void)startGame;

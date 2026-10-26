@@ -15,7 +15,7 @@ This repo builds an iPhone app that runs the original Android game *9 Innings: P
 2. `python3 scripts/build.py device`. Use `--device <id>` if several are connected (`xcrun devicectl list devices`).
 3. Tell the user to:
    - trust the developer (Settings → General → VPN & Device Management)
-   - open **9 Innings**, tap **Download game**, then tap the mirror's download button
+   - open **9 Innings** and tap **Download game** (the app fetches and verifies the APK itself)
 4. If the user already has the APK, pass `--apk /path/to/file.apk`. The build verifies the hash and bundles it, so no download is needed. Never commit or publish such a build.
 
 A free Apple ID expires the app after 7 days. Rerun `build.py device` to refresh it; saves are kept.
@@ -30,7 +30,7 @@ Send the user to the latest release's `NineInnings26.ipa` and the README's *Side
   - Supply the APK once by copying it into the app's Documents folder (`xcrun simctl get_app_container booted io.github.nineinnings.ios26 data`), then relaunch. It's adopted and verified.
 - Logs: `Documents/engine.log` in the app container. It includes fps, memory, offline decisions and unsupported calls, which are logged as `STOP …`.
 - Test hooks, off unless the environment variable is set (prefix with `SIMCTL_CHILD_` for `simctl launch`):
-  - `RDD_AUTOTEST_DOWNLOAD=1`: opens the mirror and presses its download link automatically.
+  - `RDD_AUTOTEST_DOWNLOAD=1`: taps **Download game** on launch (the download itself is always automatic).
   - `RDD_AUTOTEST_TOUCHES=1`: the app runs `Documents/autotest-taps.txt` and then deletes it. Lines are `tap X Y`, `drag X1 Y1 X2 Y2` or `wait MS`, in the game's 800×480 coordinates.
 - Run heavy builds one at a time; the engine itself needs about 250 MB.
 
