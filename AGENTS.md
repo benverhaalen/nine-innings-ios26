@@ -33,6 +33,8 @@ Send the user to the latest release's `NineInnings26.ipa` and the README's *Side
   - `RDD_AUTOTEST_DOWNLOAD=1`: taps **Download game** on launch (the download itself is always automatic).
   - `RDD_AUTOTEST_TOUCHES=1`: the app runs `Documents/autotest-taps.txt` and then deletes it. Lines are `tap X Y`, `drag X1 Y1 X2 Y2` or `wait MS`, in the game's 800×480 coordinates.
 - Run heavy builds one at a time; the engine itself needs about 250 MB.
+- Online features: the game's TCP socket is routed to `runtime/src/game_server.rs` (XOR 0xB8 framing, state in `runtime-data/server-state.txt`). Unit tests: `rustc --edition 2021 --test runtime/src/game_server.rs -o /tmp/t && /tmp/t`. The Com2uS HIVE SDK (`HubBridge`) is emulated in `engine-startup.rs` with a local account in `runtime-data/hub-account.txt`.
+- The shop is earn-only by design: real-money requests are declined, never faked as successful purchases.
 
 ## Rules
 
