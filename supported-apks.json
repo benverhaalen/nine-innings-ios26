@@ -1,0 +1,18 @@
+{
+  "apks": [
+    {
+      "title": "9 Innings: Pro Baseball 2016",
+      "version": "6.0.7",
+      "package": "com.com2us.nipb2013.normal.freefull.google.global.android.common",
+      "size_bytes": 60322552,
+      "sha256": "50b1cd98240e61f0834f5bc40e765d7075ac4835a76d271a4edda350efdf9221",
+      "sources": [
+        {
+          "name": "APKMirror",
+          "page": "https://www.apkmirror.com/apk/com2us/9-innings-2015/9-innings-2015-6-0-7-release/9-innings-2015-6-0-7-android-apk-download/",
+          "verified": "2026-10-25: SHA-256 and size match"
+        }
+      ]
+    }
+  ]
+}

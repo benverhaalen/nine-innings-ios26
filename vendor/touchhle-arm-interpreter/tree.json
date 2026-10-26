@@ -1,0 +1,139 @@
+{
+  "sha": "adffbbdae912568557f33f8596110cc677809641",
+  "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/trees/adffbbdae912568557f33f8596110cc677809641",
+  "tree": [
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b67a9a38786b8ccdd4184711553dc97012a9d8a8",
+      "size": 40,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/b67a9a38786b8ccdd4184711553dc97012a9d8a8"
+    },
+    {
+      "path": "Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ed34bb48f045f2bf2ded3a37d69c485c0acf00bf",
+      "size": 1924,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/ed34bb48f045f2bf2ded3a37d69c485c0acf00bf"
+    },
+    {
+      "path": "LICENSE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d0a1fa1482eea82e19510e7920cbe3a03e41f691",
+      "size": 16726,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/d0a1fa1482eea82e19510e7920cbe3a03e41f691"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b8ce10d32297af9a067d6759daf32a7c1caa1e2c",
+      "size": 20816,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/b8ce10d32297af9a067d6759daf32a7c1caa1e2c"
+    },
+    {
+      "path": "examples",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "8723d41988d2db5a5c99d8e701eae6b3e78eee4e",
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/trees/8723d41988d2db5a5c99d8e701eae6b3e78eee4e"
+    },
+    {
+      "path": "examples/run_arm.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9705da908abc3c46c287277404e04e90579f7ed7",
+      "size": 1795,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/9705da908abc3c46c287277404e04e90579f7ed7"
+    },
+    {
+      "path": "src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "6ac1662398d2e988a15f5f21d9faffefee9832fe",
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/trees/6ac1662398d2e988a15f5f21d9faffefee9832fe"
+    },
+    {
+      "path": "src/interpreter",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "6b103c846af306b61e0de2bfdc35be3a2816a16c",
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/trees/6b103c846af306b61e0de2bfdc35be3a2816a16c"
+    },
+    {
+      "path": "src/interpreter/arm.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6474735f4c9dcda5f31e398c2bac3fb22d085ce3",
+      "size": 47692,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/6474735f4c9dcda5f31e398c2bac3fb22d085ce3"
+    },
+    {
+      "path": "src/interpreter/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1fae16689085f64bf58308d677ad87d6ca92a934",
+      "size": 41074,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/1fae16689085f64bf58308d677ad87d6ca92a934"
+    },
+    {
+      "path": "src/interpreter/thumb16.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6525917eec31035453a83af8acbd2b62e22afd4c",
+      "size": 49633,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/6525917eec31035453a83af8acbd2b62e22afd4c"
+    },
+    {
+      "path": "src/interpreter/thumb32.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f8f4cf1e3c70e244335bbb2df90f1472dbdfdaf",
+      "size": 69770,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/3f8f4cf1e3c70e244335bbb2df90f1472dbdfdaf"
+    },
+    {
+      "path": "src/interpreter/vfp.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6482e6d1142150bcf3f850c59191bd1139defdc3",
+      "size": 35373,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/6482e6d1142150bcf3f850c59191bd1139defdc3"
+    },
+    {
+      "path": "src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "14b1690cc69c5fd8ce7f12e72d84bfb6121ed35b",
+      "size": 4255,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/14b1690cc69c5fd8ce7f12e72d84bfb6121ed35b"
+    },
+    {
+      "path": "src/mem.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1f380cc3d7cecb5766fe3ed967a4bc3fe0c26012",
+      "size": 12003,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/1f380cc3d7cecb5766fe3ed967a4bc3fe0c26012"
+    },
+    {
+      "path": "tests",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "8c5025d8dd0c8b3fe1901b794ac411bfb8ed5e17",
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/trees/8c5025d8dd0c8b3fe1901b794ac411bfb8ed5e17"
+    },
+    {
+      "path": "tests/basic.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1ee25f4db56b9f18e805b6b7d3c5826373c07f00",
+      "size": 3060,
+      "url": "https://api.github.com/repos/moleworld-dev/touchhle-arm-interpreter/git/blobs/1ee25f4db56b9f18e805b6b7d3c5826373c07f00"
+    }
+  ],
+  "truncated": false
+}

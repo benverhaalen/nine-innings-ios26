@@ -1,0 +1,26 @@
+{
+  "repo": "moleworld-dev/touchhle-arm-interpreter",
+  "commit": "adffbbdae912568557f33f8596110cc677809641",
+  "pushed_at": "2026-07-16T00:11:30Z",
+  "license": {
+    "key": "mpl-2.0",
+    "name": "Mozilla Public License 2.0",
+    "spdx_id": "MPL-2.0",
+    "url": "https://api.github.com/licenses/mpl-2.0",
+    "node_id": "MDc6TGljZW5zZTE0"
+  },
+  "files": {
+    "Cargo.toml": "39323e974e5b93c54b35579189085f0726796d6fea759c967da7a882c9836249",
+    "LICENSE": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+    "README.md": "37c63b4bd7c7aea3b52560a774a6408aecf5a31a3102e0a8812f41690b0b2819",
+    "examples/run_arm.rs": "fbafade02db083ddedf46684340b677b505e8318873989153ad4fa9a90ad934b",
+    "src/interpreter/arm.rs": "3e3210803c2c42a3ce8bd5972548ad80ea1c2a31b49be6258bc51056db5d31e8",
+    "src/interpreter/mod.rs": "8902a4a808e384470c0bc96f4021f8d8f8bbc75c6c14838b20890ca00a1adbb3",
+    "src/interpreter/thumb16.rs": "e06cab6ed9a2196aee03524cb8d0bf348c351f3e4cebbe6c91b80a6e4cf8cf74",
+    "src/interpreter/thumb32.rs": "9208a70176949bd5cce4ef98ad7e6fd4904a29c3aa3995d4bc1ca3b6b35e13f1",
+    "src/interpreter/vfp.rs": "b4d4623a6e5d237aa1e0c9d3b85fc24626864dafe6943097dd0025c5ac8ffdf4",
+    "src/lib.rs": "0d3d975d602b5de1a8f5a091788fd54f52f2bacdbbbe8f282cb0335e6eda73bd",
+    "src/mem.rs": "73c4b6cb43e695e2f6c9d36e2e85210bbd90183aab0ddc27d88b112c063fba64",
+    "tests/basic.rs": "51af212e9065e024ab8f01794d1f2e4a2c6f9edc43d0cbeac16d32620e427485"
+  }
+}

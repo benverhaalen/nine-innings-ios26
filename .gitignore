@@ -1,0 +1,7 @@
+*.apk
+build/
+dist/
+target/
+.DS_Store
+*.ipa
+xcuserdata/

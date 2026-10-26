@@ -1,0 +1,32 @@
+name: release
+# Builds the game-free IPA on a macOS runner and publishes it with the SideStore/AltStore source.
+# Trigger: push a tag like v1.0.0 (must match VERSION), or run manually to get a build artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust iPhone target
+        run: rustup target add aarch64-apple-ios
+      - name: Build IPA (audited: no game files)
+        run: python3 scripts/build.py ipa
+      - name: SideStore/AltStore source
+        run: python3 scripts/altstore_source.py dist/NineInnings26.ipa > dist/apps.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NineInnings26
+          path: dist/
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)" || { echo "tag does not match VERSION"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" dist/NineInnings26.ipa dist/NineInnings26.ipa.sha256 dist/apps.json \
+            --title "9 Innings 2016 for iPhone $GITHUB_REF_NAME" --notes-file docs/release-notes.md

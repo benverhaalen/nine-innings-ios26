@@ -1,0 +1,14 @@
+// !$*UTF8*$!
+{archiveVersion=1;classes={};objectVersion=56;objects={
+A00000000000000000000001={isa=PBXProject;buildConfigurationList=A00000000000000000000008;compatibilityVersion="Xcode 14.0";mainGroup=A00000000000000000000002;targets=(A00000000000000000000003);};
+A00000000000000000000002={isa=PBXGroup;children=(A00000000000000000000004,A00000000000000000000005);sourceTree="<group>";};
+A00000000000000000000003={isa=PBXNativeTarget;buildConfigurationList=A00000000000000000000009;buildPhases=(A00000000000000000000006);buildRules=();dependencies=();name=SigningStub;productName=SigningStub;productReference=A00000000000000000000005;productType="com.apple.product-type.application";};
+A00000000000000000000004={isa=PBXFileReference;lastKnownFileType=sourcecode.c.objc;path="main.m";sourceTree="<group>";};
+A00000000000000000000005={isa=PBXFileReference;explicitFileType=wrapper.application;path=SigningStub.app;sourceTree=BUILT_PRODUCTS_DIR;};
+A00000000000000000000006={isa=PBXSourcesBuildPhase;buildActionMask=2147483647;files=(A00000000000000000000007);runOnlyForDeploymentPostprocessing=0;};
+A00000000000000000000007={isa=PBXBuildFile;fileRef=A00000000000000000000004;};
+A00000000000000000000008={isa=XCConfigurationList;buildConfigurations=(A0000000000000000000000A);defaultConfigurationName=Release;};
+A00000000000000000000009={isa=XCConfigurationList;buildConfigurations=(A0000000000000000000000B);defaultConfigurationName=Release;};
+A0000000000000000000000A={isa=XCBuildConfiguration;buildSettings={SDKROOT=iphoneos;IPHONEOS_DEPLOYMENT_TARGET=15.0;};name=Release;};
+A0000000000000000000000B={isa=XCBuildConfiguration;buildSettings={CODE_SIGN_STYLE=Automatic;PRODUCT_NAME="$(TARGET_NAME)";GENERATE_INFOPLIST_FILE=YES;TARGETED_DEVICE_FAMILY=1;};name=Release;};
+};rootObject=A00000000000000000000001;}
