@@ -41,6 +41,8 @@ python3 scripts/build.py doctor     # checks Xcode, Rust, your Apple ID and the 
 python3 scripts/build.py device     # builds, signs with your Apple ID and installs on the connected iPhone
 ```
 
+Optional: `--icon-from /path/to/the.apk` uses the game's original icon from your APK, or `--icon icon.png` uses any square PNG. The icon only goes into your own build, never into this repo.
+
 First time only: install Xcode (App Store) and Rust (`curl https://sh.rustup.rs -sSf | sh`, then `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`). Sign in to Xcode with your Apple ID (Settings → Accounts). Connect the iPhone by cable, unlock it and tap *Trust*.
 
 On the iPhone, trust your Apple ID (Settings → General → VPN & Device Management) and enable Developer Mode if asked. Then open **9 Innings** and tap **Download game**.
