@@ -25,7 +25,13 @@ Pick the first row that fits you.
 | **Windows / Linux / a Mac without Xcode** | [Sideload the IPA](#sideload-the-ipa) with Impactor or Sideloadly | ~5 min |
 | **SideStore or AltStore** already on the iPhone | [Add the source](#sidestore--altstore) | 1 min |
 
-Every option uses a free Apple ID. Apple then makes the app expire after **7 days**; reinstall or refresh it and your save is kept. A paid developer account ($99/yr) extends that to a year.
+Every option uses a free Apple ID, and Apple signs free-ID apps for **7 days** at a time. How to keep it working:
+
+- **SideStore (recommended, set-and-forget):** it re-signs the app in the background on the phone, without a computer, so in practice it never expires. Open SideStore now and then, or use a Shortcuts automation, so the refresh runs.
+- **Mac / Impactor / Sideloadly:** reinstall once a week. Your save is kept.
+- **Paid Apple developer account ($99/yr):** signatures last a year.
+
+TrollStore installs never expire, but TrollStore only works on old iOS versions (up to 17.0), not on current iPhones.
 
 ### Mac: one command
 

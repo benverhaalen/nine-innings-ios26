@@ -151,11 +151,12 @@ def signing_identity(team):
     sys.exit(f"No 'Apple Development' signing certificate for team {team}. Open Xcode → Settings → Accounts, add your Apple ID, then 'Manage Certificates' → + → Apple Development.")
 
 
-def provision(team, bundle_id):
-    """Let Xcode create/download a development profile for bundle_id using a tiny stub app."""
+def provision(team, bundle_id, udid):
+    """Let Xcode create/download a development profile for bundle_id using a tiny stub app.
+    Building for the phone's UDID makes Xcode register it, so the profile includes that phone."""
     derived = BUILD / "signing-stub"
-    run(["xcodebuild", "-project", str(ROOT / "scripts/signing-stub/SigningStub.xcodeproj"), "-configuration", "Release",
-         "-sdk", "iphoneos", "-derivedDataPath", str(derived), "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration",
+    run(["xcodebuild", "-project", str(ROOT / "scripts/signing-stub/SigningStub.xcodeproj"), "-scheme", "SigningStub", "-configuration", "Release",
+         "-sdk", "iphoneos", "-destination", f"id={udid}", "-derivedDataPath", str(derived), "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration",
          f"DEVELOPMENT_TEAM={team}", f"PRODUCT_BUNDLE_IDENTIFIER={bundle_id}", "build"])
     stub = derived / "Build/Products/Release-iphoneos/SigningStub.app"
     xcent = next(derived.rglob("SigningStub.app.xcent"))
@@ -166,7 +167,9 @@ def devices():
     with tempfile.NamedTemporaryFile(suffix=".json") as f:
         subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", f.name], capture_output=True)
         data = json.loads(Path(f.name).read_text() or "{}")
-    return [d for d in data.get("result", {}).get("devices", []) if d.get("hardwareProperties", {}).get("platform") == "iOS"]
+    found = [d for d in data.get("result", {}).get("devices", []) if d.get("hardwareProperties", {}).get("platform") == "iOS"]
+    # Paired phones that are out of reach are listed as "unavailable"; never pick one over a reachable phone.
+    return sorted(found, key=lambda d: d.get("connectionProperties", {}).get("tunnelState") == "unavailable")
 
 
 def cmd_ipa(a):
@@ -195,14 +198,14 @@ def cmd_device(a):
         sys.exit("No Apple Development certificate found. Open Xcode once, sign in with your Apple ID (Settings → Accounts), then rerun, or pass --team.")
     bundle_id = a.bundle_id or f"io.github.nineinnings.ios26.{team.lower()}"
     found = devices()
-    device = a.device or (found[0]["identifier"] if found else None)
-    if not device:
+    chosen = next((d for d in found if a.device in (d["identifier"], d["hardwareProperties"].get("udid"))), None) if a.device else (found[0] if found else None)
+    if not chosen:
         sys.exit("No iPhone found. Connect it with a cable, unlock it and tap 'Trust This Computer'.")
     app = assemble(cargo("aarch64-apple-ios"), bundle_id, "iPhoneOS", apk)
-    profile, entitlements = provision(team, bundle_id)
+    profile, entitlements = provision(team, bundle_id, chosen["hardwareProperties"]["udid"])
     shutil.copy2(profile, app / "embedded.mobileprovision")
     run(["codesign", "--force", "--sign", signing_identity(team), "--entitlements", str(entitlements), "--timestamp=none", "--generate-entitlement-der", str(app)])
-    run(["xcrun", "devicectl", "device", "install", "app", "--device", device, str(app)])
+    run(["xcrun", "devicectl", "device", "install", "app", "--device", chosen["identifier"], str(app)])
     print("\nInstalled. On the iPhone: Settings → General → VPN & Device Management → trust your Apple ID, "
           "and if asked turn on Settings → Privacy & Security → Developer Mode. Then open 9 Innings.")
     if not apk:
@@ -235,6 +238,9 @@ def cmd_doctor(a):
     line(team is not None, f"Apple Development certificate{' (team ' + team + ')' if team else ' — sign in to Xcode with your Apple ID'}")
     found = devices() if sys.platform == "darwin" else []
     line(bool(found), f"iPhone connected{': ' + found[0].get('deviceProperties', {}).get('name', '?') if found else ' — plug in, unlock, Trust This Computer'}")
+    if found:
+        line(found[0].get("deviceProperties", {}).get("developerModeStatus") != "disabled",
+             "Developer Mode on the iPhone (Settings → Privacy & Security → Developer Mode → On, then restart the phone)")
     print("\nReady." if ok else "\nFix the items marked FIX, then rerun.")
 
 
