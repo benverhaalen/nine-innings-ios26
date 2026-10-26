@@ -71,10 +71,24 @@ Don't have SideStore yet? [iloader](https://github.com/nab138/iloader) (2.4.0 or
 ## What works
 
 - Offline play: setup, team selection, main menu, game modes and Friendly-match gameplay are verified (screenshots above). League, Special and Home Run modes use the same engine and are expected to work, but haven't been checked one by one yet. Saves persist on the device.
-- The "Disconnected" and "Not connected to the server" notices are normal: Com2uS shut the servers down. Tap **OK** and keep playing.
-- Online features (Card Market, mailbox, events, rankings) are offline for now. Restoring them with a replacement server is in progress.
+- Online features run against a replacement server built into the app (`runtime/src/game_server.rs`), because Com2uS shut the real ones down. Verified in the app: HIVE login (automatic, local account), daily login bonus, Mailbox and Tradebox, the Store with Stars and Points you earn, star items (e.g. storage expansion), Card Market search, and Online Ranking. Market selling and buying are unit-tested on the server but not yet driven through the app.
+- The shop is **earn-only**: real-money packs answer "Purchases are disabled. Earn Stars and Points by playing."
 - Performance: the engine runs at its native 20 updates per second (its own 50 ms timer).
 - Not implemented yet: sound.
+
+## Limitations
+
+This is a revival, not the original service. Read this before expecting the 2016 experience:
+
+- **No other players.** The replacement server runs inside your app. The Card Market, gifting and rankings only know you: the market shows "No card was found", gifts can only go to yourself, and you're always #1. A shared online server would fix this; none is running.
+- **No real-money purchases.** Star and point packs are declined. Earn Stars and Points by playing.
+- **Guessed economy.** The original star-item prices and daily-bonus rewards aren't documented anywhere we could find, so they're reasonable stand-ins. Store tiles can show a different star price from the confirmation dialog; the dialog's price is what you pay.
+- **Fake HIVE account.** The account is created on the device. There's no cloud save and no cross-device login; your save lives only on this iPhone. Deleting the app deletes it.
+- **Old accounts are gone.** Progress saved on Com2uS's servers before the shutdown can't be recovered.
+- **Gone for good:** events and promotions, news, push notifications, Com2uS links and cross-promotion. The game may still show their buttons; they do nothing useful.
+- **Not every online screen has been exercised.** The replies were rebuilt from the game's own code; the screens listed above were checked in the app, others (e.g. some event and exchange paths) only by analysis. Unsupported calls show up as `STOP …` in `Documents/engine.log`; please [open an issue](../../issues) with it.
+- **Emulated.** The original Android code runs in an ARM interpreter: about 20 fps (the game's native rate), more battery use than a native app, no sound yet.
+- **Sideloading.** It's not on the App Store. A free Apple ID signature lasts 7 days, and the first launch needs the APK from a public mirror (or your own copy).
 
 ## Troubleshooting
 
@@ -92,6 +106,7 @@ Don't have SideStore yet? [iloader](https://github.com/nab138/iloader) (2.4.0 or
 ```
 runtime/ios-graphics.m       UIKit host: rendering, touch, text, first-launch download/import
 runtime/src/bin/engine-startup.rs   loads libgame.so from the APK and runs it; fake JNI/Android
+runtime/src/game_server.rs   replacement game server (local, earn-only) and saved server state
 runtime/src/apk.rs           reads assets, JNI method list and string resources from the APK at launch
 runtime/src/dalvik.rs        tiny Dalvik interpreter for the game's two Java text-layout methods
 vendor/touchhle-arm-interpreter   ARMv7 interpreter (from touchHLE, MPL-2.0)
