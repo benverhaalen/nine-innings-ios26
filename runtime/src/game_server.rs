@@ -18,6 +18,11 @@
 //! Transactions come in two legs (e.g. MarketBuy, then MarketBuyConfirm with the key from the first
 //! reply). The client saves each leg and resends it as RePacket after a lost connection, so every
 //! transactional reply is remembered and replayed instead of being applied twice.
+//!
+//! Anything involving other players goes to the shared online server (`server/worker.js`) over HTTPS:
+//! NetPoints (the market currency, held by the online server as on the original), the card market,
+//! gifts between players, deliveries (sale proceeds, gifts) and rankings. Without a connection those
+//! features say so, and the rest of the game keeps working offline.
 
 use std::path::PathBuf;
 
@@ -94,6 +99,39 @@ mod cmd {
 
 /// Shown when the player tries to spend real money; the store closes normally afterwards.
 const EARN_ONLY: &str = "Purchases are disabled. Earn Stars and Points by playing.";
+const OFFLINE: &str = "Can't reach the online server. Check your internet connection and try again.";
+/// The shared online server every copy of the app uses unless NINE_INNINGS_SERVER says otherwise
+/// ("off" disables it).
+pub const ONLINE_URL: &str = "https://nine-innings.pavlo48045535.workers.dev";
+/// After a failed connection, online features wait this long before trying again.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Sends one request to the online server: (operation, body) -> reply text, or None if unreachable.
+pub type Transport = Box<dyn FnMut(&str, &str) -> Option<String>>;
+
+/// Reaches the online server with the system's curl (development builds on a Mac, and tests).
+#[allow(dead_code)]
+pub fn curl_transport(base: String) -> Transport {
+    Box::new(move |op, body| {
+        use std::io::Write;
+        let mut child = std::process::Command::new("curl")
+            .args(["-s", "-m", "8", "--data-binary", "@-", &format!("{base}/v1/{op}")])
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().ok()?;
+        child.stdin.take()?.write_all(body.as_bytes()).ok()?;
+        let out = child.wait_with_output().ok()?;
+        let text = String::from_utf8(out.stdout).ok()?;
+        (out.status.success() && !text.is_empty()).then_some(text)
+    })
+}
+
+/// The online server's base URL, or None when online features are switched off.
+pub fn online_url() -> Option<String> {
+    match std::env::var("NINE_INNINGS_SERVER") {
+        Ok(v) if v == "off" => None,
+        Ok(v) if !v.is_empty() => Some(v.trim_end_matches('/').to_string()),
+        _ => Some(ONLINE_URL.to_string()),
+    }
+}
 
 /// A gift in the player's mailbox (MailBoxList/MailBoxRecv).
 #[derive(Clone)]
@@ -102,13 +140,6 @@ struct Mail { id: u32, kind: u8, card_kind: u8, icon: [u8; 2], points: u32, star
 /// A market box item: sale proceeds (kind 1, points) or a returned card (kind 0).
 #[derive(Clone)]
 struct BoxItem { id: u32, kind: u8, display: [u8; 3], amount: u32, text: Vec<u8>, card: Vec<u8> }
-
-#[derive(Clone, Copy, PartialEq)]
-enum Status { Pending, Active, Sold, Cancelled }
-
-/// A card offered on the market.
-#[derive(Clone)]
-struct Listing { id: u32, status: Status, price: u32, seller: Vec<u8>, card: Vec<u8> }
 
 /// The second leg a confirm key refers to.
 #[derive(Clone, Copy)]
@@ -130,10 +161,16 @@ struct State {
     stats: [u32; 7],
     mail: Vec<Mail>,
     market_box: Vec<BoxItem>,
-    listings: Vec<Listing>,
     keys: Vec<(u32, Key)>,
     /// Recent transactional requests and their replies, for RePacket.
     done: Vec<(u8, Vec<u8>, u8, Vec<u8>)>,
+    /// This phone's secret for the online server (64 hex characters, made on first use).
+    secret: String,
+    /// Online deliveries stored locally and not yet acknowledged, and the last ones seen (no duplicates).
+    acks: Vec<u32>,
+    seen: Vec<u32>,
+    /// Market sales the online server hasn't confirmed yet (retried later).
+    unconfirmed: Vec<u32>,
 }
 
 impl State {
@@ -156,8 +193,6 @@ impl State {
                     points: n(6) as u32, stars: n(7) as u32, text: b(8), card: b(9) }),
                 "box" => s.market_box.push(BoxItem { id: n(1) as u32, kind: n(2) as u8, display: [n(3) as u8, n(4) as u8, n(5) as u8],
                     amount: n(6) as u32, text: b(7), card: b(8) }),
-                "listing" => s.listings.push(Listing { id: n(1) as u32, price: n(3) as u32, seller: b(4), card: b(5),
-                    status: match n(2) { 0 => Status::Pending, 1 => Status::Active, 2 => Status::Sold, _ => Status::Cancelled } }),
                 "key" => {
                     let r = n(3) as u32;
                     let key = match f.get(2).copied().unwrap_or("") {
@@ -167,6 +202,10 @@ impl State {
                     s.keys.push((n(1) as u32, key));
                 }
                 "done" => s.done.push((n(1) as u8, b(2), n(3) as u8, b(4))),
+                "secret" => s.secret = f.get(1).unwrap_or(&"").to_string(),
+                "acks" => s.acks = f[1..].iter().filter_map(|v| v.parse().ok()).collect(),
+                "seen" => s.seen = f[1..].iter().filter_map(|v| v.parse().ok()).collect(),
+                "unconfirmed" => s.unconfirmed = f[1..].iter().filter_map(|v| v.parse().ok()).collect(),
                 _ => {}
             }
         }
@@ -189,9 +228,6 @@ impl State {
         for b in &self.market_box {
             t += &format!("box {} {} {} {} {} {} {} {}\n", b.id, b.kind, b.display[0], b.display[1], b.display[2], b.amount, hex(&b.text), hex(&b.card));
         }
-        for l in &self.listings {
-            t += &format!("listing {} {} {} {} {}\n", l.id, l.status as u8, l.price, hex(&l.seller), hex(&l.card));
-        }
         for (k, key) in &self.keys {
             let (name, r) = match key {
                 Key::Mail(r) => ("mail", *r), Key::MailSent(r) => ("mail_sent", *r), Key::MarketSell(r) => ("sell", *r),
@@ -203,6 +239,8 @@ impl State {
         for (c, body, rc, reply) in &self.done {
             t += &format!("done {c} {} {rc} {}\n", hex(body), hex(reply));
         }
+        let list = |v: &[u32]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ");
+        t += &format!("secret {}\nacks {}\nseen {}\nunconfirmed {}\n", self.secret, list(&self.acks), list(&self.seen), list(&self.unconfirmed));
         let temp = path.with_extension("tmp");
         if std::fs::write(&temp, t).and_then(|()| std::fs::rename(&temp, path)).is_err() {
             println!("game server: could not save {}", path.display());
@@ -218,8 +256,6 @@ impl State {
         let i = self.keys.iter().position(|(key, _)| *key == k)?;
         Some(self.keys.remove(i).1)
     }
-
-    fn listing(&mut self, id: u32) -> Option<&mut Listing> { self.listings.iter_mut().find(|l| l.id == id) }
 
     /// Puts a gift in the player's mailbox (oldest first, at most 20).
     fn add_mail(&mut self, kind: u8, points: u32, stars: u32, text: &[u8], card: &[u8]) {
@@ -237,13 +273,20 @@ enum Reply {
     Silent,
 }
 
-pub struct Server { pending: Vec<u8>, hang_up: bool, state: State, path: PathBuf }
+/// `(card kind, player id)` → (lowercase "short name|full name", position code), from the APK's player
+/// tables (`card_tables.rs`). Market listings carry them so searches by name and position work.
+pub type CardInfo = std::collections::HashMap<(u8, u32), (String, u8)>;
+
+pub struct Server { pending: Vec<u8>, hang_up: bool, state: State, path: PathBuf, online: Online, cards: CardInfo }
 
 impl Server {
-    pub fn new() -> Self {
+    /// `transport` reaches the shared online server; None plays offline only.
+    pub fn new(transport: Option<Transport>) -> Self {
         let path = PathBuf::from("runtime-data/server-state.txt");
-        Server { pending: Vec::new(), hang_up: false, state: State::load(&path), path }
+        Server { pending: Vec::new(), hang_up: false, state: State::load(&path), path, online: Online::new(transport), cards: CardInfo::new() }
     }
+
+    pub fn set_cards(&mut self, cards: CardInfo) { self.cards = cards; }
 
     /// True once after a command the server can't answer: the host then closes the connection, so
     /// the game shows its normal "not connected" notice instead of waiting forever.
@@ -311,7 +354,7 @@ impl Server {
     }
 
     fn reply(&mut self, command: u8, body: &[u8]) -> Option<Reply> {
-        let s = &mut self.state;
+        let (s, net, cards) = (&mut self.state, &mut self.online, &self.cards);
         let ok = |body: Vec<u8>| Some(Reply::Send(command, body));
         let int = |at: usize| u32_at(body, at);
         match command {
@@ -320,7 +363,11 @@ impl Server {
             cmd::VERSION_CHECK => { let mut r = fixed(b"6.0.7", 20); r.extend([0u8; 8]); ok(r) }
             cmd::PING => Some(Reply::Silent),
             // Connect: 50-byte id the client stores, an ignored byte, and the one-time hub reward flag (0).
-            cmd::CONNECT => { let mut r = fixed(s.player.as_bytes(), NAME); r.extend([0, 0]); ok(r) }
+            cmd::CONNECT => {
+                // Registering here makes the ID shown everywhere the shared one (best effort; offline is fine).
+                net.register(s);
+                let mut r = fixed(s.player.as_bytes(), NAME); r.extend([0, 0]); ok(r)
+            }
             cmd::CONNECT_EX | cmd::USER_INFO_EX_REG | cmd::HUB_GUEST_TO_HIVE_GUEST => ok(Vec::new()),
             // [byte][text length u32][text]: the player ID the ranking screen shows.
             cmd::USER_INFO_REG => { let mut r = vec![0]; r.extend((s.player.len() as u32).to_be_bytes()); r.extend(s.player.as_bytes()); ok(r) }
@@ -351,8 +398,13 @@ impl Server {
 
             // ---- Balances ----
             cmd::STAR_INQUIRY => ok(s.stars.to_be_bytes().to_vec()),
-            // Net points, conversion rate %, conversion limit.
-            cmd::NET_POINT_INQUIRY => ok(be(&[s.net_points, 0, POINT_CAP])),
+            // Net points, exchange fee %, Points that can still be exchanged into NetPoints today.
+            // NetPoints live on the online server; offline, the last known balance is shown and nothing can be exchanged.
+            cmd::NET_POINT_INQUIRY => {
+                let mut depositable = 0;
+                if let Answer::Ok(a) = net.call(s, "wallet", &[]) { s.net_points = a.num("netpoints"); depositable = a.num("depositable"); }
+                ok(be(&[s.net_points, 0, depositable]))
+            }
 
             // ---- Star shop: spending Stars the player has earned ----
             // [ignored] + 8 premium card choices (store index 0x2f..0x36) + 3 legend card choices (0x4c..0x4e).
@@ -384,16 +436,20 @@ impl Server {
 
             // ---- Points <-> Net Points ----
             cmd::POINT_CHANGE => {
+                // Mode 1 turns NetPoints into Points, mode 2 Points into NetPoints; the online server decides.
                 let (mode, amount, points) = (*body.first()?, int(1), int(5));
                 if amount == 0 { return error("Enter an amount."); }
                 match mode {
-                    1 if amount > s.net_points => return error("Not enough Net Points."),
                     1 if points.saturating_add(amount) > POINT_CAP => return error("That would exceed the Point limit."),
-                    1 => s.net_points -= amount,
                     2 if amount > points => return error("Not enough Points."),
-                    2 => s.net_points = s.net_points.saturating_add(amount).min(POINT_CAP),
+                    1 | 2 => {}
                     _ => return error("Unknown exchange."),
                 }
+                let a = match net.call(s, "exchange", &[("mode", mode.to_string()), ("amount", amount.to_string()), ("tx", tx_id())]) {
+                    Answer::Ok(a) => a,
+                    other => return other.refusal(),
+                };
+                s.net_points = a.num("netpoints");
                 let key = s.issue_key(Key::PointChange);
                 ok(be(&[key, s.net_points, 0, amount]))
             }
@@ -401,6 +457,7 @@ impl Server {
 
             // ---- Mailbox ----
             cmd::MAIL_LIST => {
+                net.sync_inbox(s);
                 let mut r = vec![s.mail.len().min(LIST_MAX) as u8];
                 for m in s.mail.iter().take(LIST_MAX) {
                     r.extend(m.id.to_be_bytes()); r.extend(fixed(&m.text, NAME)); r.extend([m.kind, m.card_kind, m.icon[0], m.icon[1]]);
@@ -430,20 +487,15 @@ impl Server {
                 ok(Vec::new())
             }
             cmd::MAIL_SEND => {
-                // [sequence][previous time][recipient 50][points][card 35]; the client already deducted the gift.
-                let recipient = trim(&body.get(8..8 + NAME)?.to_vec());
-                if recipient != s.player.as_bytes() {
-                    let mut msg = vec![1];
-                    msg.extend(format!("Transfer failed because {} is not registered to the HIVE.", String::from_utf8_lossy(&recipient)).as_bytes());
-                    msg.push(0);
-                    return Some(Reply::Send(cmd::ERROR, msg));
-                }
+                // [sequence][previous time][recipient 50][points][card 35], delivered to the recipient's
+                // mailbox by the online server.
+                let recipient = String::from_utf8_lossy(&trim(body.get(8..8 + NAME)?)).into_owned();
                 let (points, card) = (int(0x3a), body.get(0x3e..0x3e + CARD)?.to_vec());
-                let id = s.new_id();
-                let (kind, card_kind) = if points > 0 { (1, 0) } else { (0, card[4]) };
-                s.mail.push(Mail { id, kind, card_kind, icon: [0, 0], points, stars: 0, text: fixed(s.player.as_bytes(), NAME),
-                    card: if points > 0 { vec![0; CARD] } else { card } });
-                let key = s.issue_key(Key::MailSent(id));
+                let gift = if points > 0 { ("points", points.to_string()) } else { ("card", hex(&card)) };
+                if let other @ (Answer::Refused(_) | Answer::Unreachable) = net.call(s, "gift", &[("to", recipient), gift, ("tx", tx_id())]) {
+                    return other.refusal();
+                }
+                let key = s.issue_key(Key::MailSent(0));
                 ok(key.to_be_bytes().to_vec())
             }
             cmd::MAIL_SEND_CONFIRM => { s.take_key(int(0)); ok(Vec::new()) }
@@ -451,76 +503,99 @@ impl Server {
             // ---- Ranking ----
             cmd::RANK => {
                 for i in 0..7 { s.stats[i] = int(4 * i); }
-                ok(rank_tables(&s.player, &s.stats))
+                let stats = s.stats.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                match net.call(s, "rank", &[("stats", stats)]) {
+                    Answer::Ok(a) => ok(online_rank_tables(&a, &s.player)),
+                    // Offline: only this player's own records.
+                    _ => ok(rank_tables(&s.player, &s.stats)),
+                }
             }
 
             // ---- Card market ----
             cmd::MARKET_SEARCH => {
-                // Other players' active listings, 15 per page (page number at 0, category 0/1/2 at 8).
-                let (page, category) = (int(0).max(1) as usize, body.get(8).copied().unwrap_or(0xff));
-                let me = fixed(s.player.as_bytes(), NAME);
-                let found: Vec<&Listing> = s.listings.iter()
-                    .filter(|l| l.status == Status::Active && l.seller != me && (category > 2 || l.card.get(4) == Some(&category))).collect();
-                let mut r = (found.len() as u32).to_be_bytes().to_vec();
-                let shown: Vec<&&Listing> = found.iter().skip((page - 1) * 15).take(15).collect();
-                r.push(shown.len() as u8);
-                for l in shown { r.extend(l.id.to_be_bytes()); r.extend(&l.seller); r.extend(l.price.to_be_bytes()); r.extend(&l.card); }
+                // Other players' cards on sale, 15 per page: [page][?][category 0 batter/1 pitcher/2 cheerleader]
+                // [team: 0-29, 100 American League, 200 National League][grade][level-1][batter position]
+                // [pitcher position][cheerleader filter][sort: 0 newest, 1 highest price, 2 lowest price]
+                // [player name 20][seller 50]. 0xff is "any". The cheerleader filter isn't supported (ignored).
+                net.confirm_sales(s);
+                let (page, at) = (int(0).max(1), |i: usize| body.get(i).copied().unwrap_or(0xff));
+                let category = at(8);
+                let position = match category { 0 => at(12), 1 => at(13), _ => 0xff };
+                let mut q = vec![("page", page.to_string()), ("category", category.to_string())];
+                for (k, v) in [("team", at(9)), ("grade", at(10)), ("level", at(11)), ("pos", position), ("sort", at(15))] {
+                    if v != 0xff { q.push((k, v.to_string())); }
+                }
+                for (k, range) in [("name", 16..36), ("seller", 36..36 + NAME)] {
+                    let t = text_of(body.get(range).unwrap_or(&[]));
+                    if !t.is_empty() { q.push((k, t)); }
+                }
+                let a = match net.call(s, "search", &q) {
+                    Answer::Ok(a) => a,
+                    other => return other.refusal(),
+                };
+                let rows = a.rows("l");
+                let mut r = a.num("total").to_be_bytes().to_vec();
+                r.push(rows.len().min(15) as u8);
+                for l in rows.iter().take(15) {
+                    r.extend(num(l, 0).to_be_bytes()); r.extend(fixed(l.get(1).unwrap_or(&"").as_bytes(), NAME));
+                    r.extend(num(l, 2).to_be_bytes()); r.extend(fixed(&unhex(l.get(3).unwrap_or(&"")), CARD));
+                }
                 ok(r)
             }
             cmd::MARKET_SELL => {
                 let (price, card) = (int(8), body.get(12..12 + CARD)?.to_vec());
                 if price == 0 { return error("Enter a price."); }
-                if s.listings.iter().filter(|l| l.seller == fixed(s.player.as_bytes(), NAME) && l.status == Status::Active).count() >= LIST_MAX {
-                    return error("You already have 20 cards on the market.");
-                }
-                let id = s.new_id();
-                s.listings.push(Listing { id, status: Status::Pending, price, seller: fixed(s.player.as_bytes(), NAME), card });
-                let key = s.issue_key(Key::MarketSell(id));
+                let (name, pos) = cards.get(&(card[4], u32_at(&card, 0))).cloned().unwrap_or((String::new(), 0xff));
+                let q = [("price", price.to_string()), ("card", hex(&card)), ("name", name), ("pos", pos.to_string())];
+                let a = match net.call(s, "sell", &q) {
+                    Answer::Ok(a) => a,
+                    other => return other.refusal(),
+                };
+                let key = s.issue_key(Key::MarketSell(a.num("id")));
                 ok(key.to_be_bytes().to_vec())
             }
             cmd::MARKET_SELL_CONFIRM => {
                 if let Some(Key::MarketSell(id)) = s.take_key(int(0)) {
-                    if let Some(l) = s.listing(id) { l.status = Status::Active; }
+                    s.unconfirmed.push(id);
+                    net.confirm_sales(s);
                 }
                 ok(Vec::new())
             }
             cmd::MARKET_BUY => {
-                let me = fixed(s.player.as_bytes(), NAME);
-                let net_points = s.net_points;
-                let Some(l) = s.listing(int(0)) else { return error("That card has already been sold.") };
-                if l.status != Status::Active { return error("That card has already been sold."); }
-                if l.seller == me { return error("You can't buy your own card."); }
-                if l.price > net_points { return error("Not enough Net Points."); }
-                l.status = Status::Sold;
-                let (id, price) = (l.id, l.price);
-                s.net_points -= price;
-                // The proceeds belong in the seller's market box (kind 1, Points). Only this player's own
-                // listings exist on a local server, and those are never offered to them.
-                let key = s.issue_key(Key::MarketBuy(id));
+                // The online server takes the NetPoints and pays the seller; the client adds the card.
+                let a = match net.call(s, "buy", &[("id", int(0).to_string())]) {
+                    Answer::Ok(a) => a,
+                    other => return other.refusal(),
+                };
+                s.net_points = a.num("netpoints");
+                let key = s.issue_key(Key::MarketBuy(int(0)));
                 ok(be(&[key, 0, s.net_points]))
             }
             cmd::MARKET_BUY_CONFIRM => { s.take_key(int(0)); ok(Vec::new()) }
             cmd::MARKET_MY_LIST => {
-                let me = fixed(s.player.as_bytes(), NAME);
-                let mine: Vec<&Listing> = s.listings.iter().filter(|l| l.seller == me && l.status == Status::Active).take(LIST_MAX).collect();
-                let mut r = vec![mine.len() as u8];
-                for l in mine { r.extend(l.id.to_be_bytes()); r.extend(l.price.to_be_bytes()); r.extend(&l.card); }
+                net.confirm_sales(s);
+                let a = match net.call(s, "mine", &[]) {
+                    Answer::Ok(a) => a,
+                    other => return other.refusal(),
+                };
+                let rows = a.rows("l");
+                let mut r = vec![rows.len().min(LIST_MAX) as u8];
+                for l in rows.iter().take(LIST_MAX) {
+                    r.extend(num(l, 0).to_be_bytes()); r.extend(num(l, 1).to_be_bytes()); r.extend(fixed(&unhex(l.get(2).unwrap_or(&"")), CARD));
+                }
                 ok(r)
             }
             cmd::MARKET_MY_CANCEL => {
-                let me = fixed(s.player.as_bytes(), NAME);
-                let Some(l) = s.listing(int(0)) else { return error("That card has already been sold.") };
-                if l.seller != me || l.status != Status::Active { return error("That card has already been sold."); }
-                l.status = Status::Cancelled;
-                let id = l.id;
-                let key = s.issue_key(Key::MarketCancel(id));
+                // Refused once sold, so the card can't come back as well as being sold.
+                if let other @ (Answer::Refused(_) | Answer::Unreachable) = net.call(s, "cancel", &[("id", int(0).to_string())]) {
+                    return other.refusal();
+                }
+                let key = s.issue_key(Key::MarketCancel(int(0)));
                 ok(key.to_be_bytes().to_vec())
             }
-            cmd::MARKET_MY_CANCEL_CONFIRM => {
-                if let Some(Key::MarketCancel(id)) = s.take_key(int(0)) { s.listings.retain(|l| l.id != id); }
-                ok(Vec::new())
-            }
+            cmd::MARKET_MY_CANCEL_CONFIRM => { s.take_key(int(0)); ok(Vec::new()) }
             cmd::MARKET_BOX_LIST => {
+                net.sync_inbox(s);
                 let mut r = vec![s.market_box.len().min(LIST_MAX) as u8];
                 for b in s.market_box.iter().take(LIST_MAX) {
                     r.extend(b.id.to_be_bytes()); r.extend(fixed(&b.text, NAME)); r.push(b.kind); r.extend(b.display);
@@ -561,6 +636,159 @@ impl Server {
             _ => None,
         }
     }
+}
+
+/// The online server's reply.
+enum Answer { Ok(Fields), Refused(String), Unreachable }
+
+impl Answer {
+    /// The error popup for a failed online request.
+    fn refusal(self) -> Option<Reply> {
+        match self {
+            Answer::Refused(m) => error(&m),
+            _ => error(OFFLINE),
+        }
+    }
+}
+
+/// Data lines of an online reply ("key=value").
+struct Fields(Vec<(String, String)>);
+
+impl Fields {
+    fn num(&self, key: &str) -> u32 { self.0.iter().find(|(k, _)| k == key).and_then(|(_, v)| v.parse().ok()).unwrap_or(0) }
+    fn rows(&self, key: &str) -> Vec<Vec<&str>> { self.0.iter().filter(|(k, _)| k == key).map(|(_, v)| v.split(' ').collect()).collect() }
+}
+
+fn num(row: &[&str], i: usize) -> u32 { row.get(i).and_then(|v| v.parse().ok()).unwrap_or(0) }
+
+/// Connection to the shared online server.
+struct Online { transport: Option<Transport>, registered: bool, failed_at: Option<std::time::Instant> }
+
+impl Online {
+    fn new(transport: Option<Transport>) -> Self { Online { transport, registered: false, failed_at: None } }
+
+    /// Sends one request. Unreachable right after a failure, so offline play doesn't wait on timeouts.
+    fn send(&mut self, op: &str, body: &str) -> Answer {
+        if self.failed_at.is_some_and(|t| t.elapsed() < RETRY_AFTER) { return Answer::Unreachable; }
+        let Some(transport) = self.transport.as_mut() else { return Answer::Unreachable };
+        // One retry: requests that change balances carry a transaction id, so a retry can't apply twice.
+        let Some(text) = transport(op, body).or_else(|| transport(op, body)) else {
+            println!("game server: online server unreachable ({op})");
+            self.failed_at = Some(std::time::Instant::now());
+            return Answer::Unreachable;
+        };
+        self.failed_at = None;
+        let mut lines = text.lines();
+        match lines.next() {
+            Some("ok") => Answer::Ok(Fields(lines.filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect())),
+            Some(l) if l.starts_with("error=") => { println!("game server: online server refused {op}: {l}"); Answer::Refused(l[6..].to_string()) }
+            _ => { self.failed_at = Some(std::time::Instant::now()); Answer::Unreachable }
+        }
+    }
+
+    /// Gets this phone's shared player ID (once per launch), making a secret on first use.
+    fn register(&mut self, s: &mut State) -> bool {
+        if self.registered { return true; }
+        if s.secret.len() != 64 { s.secret = random_hex(32); }
+        if let Answer::Ok(a) = self.send("register", &format!("secret={}\nwant={}\n", s.secret, s.player)) {
+            if let Some((_, name)) = a.0.iter().find(|(k, _)| k == "player") {
+                if *name != s.player { println!("game server: online player ID {name} (was {})", s.player); }
+                s.player = name.clone();
+                self.registered = true;
+            }
+        }
+        self.registered
+    }
+
+    /// One authenticated request. If the online server no longer knows this phone, registers again once.
+    fn call(&mut self, s: &mut State, op: &str, fields: &[(&str, String)]) -> Answer {
+        for _ in 0..2 {
+            if !self.register(s) { return Answer::Unreachable; }
+            let mut body = format!("player={}\nsecret={}\n", s.player, s.secret);
+            for (k, v) in fields { body += &format!("{k}={v}\n"); }
+            match self.send(op, &body) {
+                Answer::Refused(m) if m.contains("isn't registered") => self.registered = false,
+                other => return other,
+            }
+        }
+        Answer::Unreachable
+    }
+
+    /// Moves waiting deliveries (gifts, sale proceeds, returned cards) into the local mailbox and market
+    /// box, and acknowledges the ones stored last time.
+    fn sync_inbox(&mut self, s: &mut State) {
+        let ack = s.acks.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+        let Answer::Ok(a) = self.call(s, "inbox", &[("ack", ack)]) else { return };
+        s.acks.clear();
+        for m in a.rows("m") {
+            let (id, place, kind, points, stars) = (num(&m, 0), num(&m, 1), num(&m, 2) as u8, num(&m, 3), num(&m, 4));
+            let field = |i: usize| m.get(i).filter(|v| **v != "-").map(|v| unhex(v)).unwrap_or_default();
+            let (text, card) = (field(5), field(6));
+            if !s.seen.contains(&id) {
+                if place == 0 {
+                    if s.mail.len() >= LIST_MAX { continue; }
+                    let card_kind = if kind == 0 { card.get(4).copied().unwrap_or(0) } else { 0 };
+                    let local = s.new_id();
+                    s.mail.push(Mail { id: local, kind, card_kind, icon: [0, 0], points, stars, text: fixed(&text, NAME), card: fixed(&card, CARD) });
+                } else {
+                    if s.market_box.len() >= LIST_MAX { continue; }
+                    let local = s.new_id();
+                    s.market_box.push(BoxItem { id: local, kind, display: [0; 3], amount: points, text: fixed(&text, NAME), card: fixed(&card, CARD) });
+                }
+                s.seen.push(id);
+                let excess = s.seen.len().saturating_sub(200);
+                s.seen.drain(..excess);
+            }
+            s.acks.push(id);
+        }
+    }
+
+    /// Puts confirmed sales on the market (kept for later if the online server can't be reached).
+    fn confirm_sales(&mut self, s: &mut State) {
+        while let Some(&id) = s.unconfirmed.first() {
+            if !matches!(self.call(s, "activate", &[("id", id.to_string())]), Answer::Ok(_)) { return; }
+            s.unconfirmed.remove(0);
+        }
+    }
+}
+
+/// Random bytes as hex, from the system's random source.
+fn random_hex(len: usize) -> String {
+    use std::io::Read;
+    let mut b = vec![0u8; len];
+    if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        for (i, v) in b.iter_mut().enumerate() { *v = (t >> (i % 16 * 8)) as u8 ^ (i as u8).wrapping_mul(151); }
+    }
+    hex(&b)
+}
+
+/// A transaction id: a retried request with it is applied once by the online server.
+fn tx_id() -> String { random_hex(8) }
+
+/// The four leaderboards from the online server: top 7 per table, then the player's own row.
+fn online_rank_tables(a: &Fields, player: &str) -> Vec<u8> {
+    let mut r = Vec::new();
+    for (t, size) in [(0u32, 58usize), (1, 62), (2, 62), (3, 62)] {
+        let start = r.len();
+        // The online server sends the sort key first; League and Basic records are [wins][score].
+        let row = |rank: u32, name: &[u8], a: u32, b: u32| {
+            let (v1, v2) = if t >= 2 { (b, a) } else { (a, b) };
+            let mut w = rank.to_be_bytes().to_vec();
+            w.extend(v1.to_be_bytes());
+            if size == 62 { w.extend(v2.to_be_bytes()); }
+            w.extend(fixed(name, NAME));
+            w
+        };
+        let top: Vec<Vec<&str>> = a.rows("r").into_iter().filter(|x| num(x, 0) == t).take(7).collect();
+        for x in &top { r.extend(row(num(x, 1), x.get(2).unwrap_or(&"").as_bytes(), num(x, 3), num(x, 4))); }
+        r.resize(start + 7 * size, 0);
+        if let Some(me) = a.rows("me").into_iter().find(|x| num(x, 0) == t) {
+            r.extend(row(num(&me, 1), player.as_bytes(), num(&me, 2), num(&me, 3)));
+        }
+        r.resize(start + 8 * size, 0);
+    }
+    r
 }
 
 fn error(message: &str) -> Option<Reply> {
@@ -663,6 +891,10 @@ fn trim(field: &[u8]) -> Vec<u8> { field.iter().copied().take_while(|b| *b != 0)
 
 fn be(values: &[u32]) -> Vec<u8> { values.iter().flat_map(|v| v.to_be_bytes()).collect() }
 
+/// Text the player typed into a fixed-width field: up to the first NUL, printable ASCII only, trimmed.
+fn text_of(b: &[u8]) -> String {
+    b.iter().take_while(|c| **c != 0).filter(|c| c.is_ascii_graphic() || **c == b' ').map(|c| *c as char).collect::<String>().trim().to_string()
+}
 fn u32_at(b: &[u8], at: usize) -> u32 { b.get(at..at + 4).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]])).unwrap_or(0) }
 
 pub fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
@@ -673,13 +905,17 @@ fn unhex(s: &str) -> Vec<u8> { (0..s.len() / 2).filter_map(|i| u8::from_str_radi
 mod tests {
     use super::*;
 
-    fn server() -> Server {
-        let path = std::env::temp_dir().join(format!("server-state-{}-{:?}.txt", std::process::id(), std::thread::current().id()));
+    fn server() -> Server { server_at("", None) }
+
+    fn server_at(name: &str, transport: Option<Transport>) -> Server {
+        let path = std::env::temp_dir().join(format!("server-state-{}-{:?}{name}.txt", std::process::id(), std::thread::current().id()));
         let _ = std::fs::remove_file(&path);
         let mut state = State::load(&path);
         state.player = "ME".into();
-        Server { pending: Vec::new(), hang_up: false, state, path }
+        Server { pending: Vec::new(), hang_up: false, state, path, online: Online::new(transport), cards: CardInfo::new() }
     }
+
+    fn error_text(r: &[u8]) -> String { String::from_utf8_lossy(&r[6..r.len() - 1]).into_owned() }
 
     fn request(command: u8, body: &[u8]) -> Vec<u8> {
         let mut f = ((HEADER + body.len()) as u16).to_be_bytes().to_vec();
@@ -752,21 +988,78 @@ mod tests {
     }
 
     #[test]
-    fn market_listing_lifecycle() {
+    fn online_features_say_when_offline() {
         let mut s = server();
-        let mut sell = vec![0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 100];
-        sell.extend(vec![7; CARD]);
-        let key = u32_at(&ask(&mut s, cmd::MARKET_SELL, &sell), 5);
-        ask(&mut s, cmd::MARKET_SELL_CONFIRM, &key.to_be_bytes());
-        let mine = ask(&mut s, cmd::MARKET_MY_LIST, &[]);
-        assert_eq!(mine[5], 1);
-        assert_eq!(mine.len(), 5 + 1 + 43);
-        // A player never sees their own listings in Search.
-        assert_eq!(&ask(&mut s, cmd::MARKET_SEARCH, &[0; 86])[5..10], &[0, 0, 0, 0, 0]);
-        let id = u32_at(&mine, 6);
-        let key = u32_at(&ask(&mut s, cmd::MARKET_MY_CANCEL, &id.to_be_bytes()), 5);
-        ask(&mut s, cmd::MARKET_MY_CANCEL_CONFIRM, &key.to_be_bytes());
-        assert_eq!(ask(&mut s, cmd::MARKET_MY_LIST, &[])[5], 0);
+        let r = ask(&mut s, cmd::MARKET_SEARCH, &[0; 86]);
+        assert_eq!(r[3], cmd::ERROR);
+        assert_eq!(error_text(&r), OFFLINE);
+        assert_eq!(ask(&mut s, cmd::MAIL_LIST, &[])[3], cmd::MAIL_LIST, "the local mailbox still opens");
+        assert_eq!(ask(&mut s, cmd::RANK, &[0; 28])[3], cmd::RANK, "own records still show");
+    }
+
+    /// Two phones trading through a running online server (set NINE_INNINGS_TEST_SERVER, e.g. to a
+    /// local `wrangler dev`).
+    #[test]
+    fn two_players_trade_through_the_online_server() {
+        let Ok(url) = std::env::var("NINE_INNINGS_TEST_SERVER") else { return };
+        let (mut a, mut b) = (server_at("a", Some(curl_transport(url.clone()))), server_at("b", Some(curl_transport(url))));
+        ask(&mut a, cmd::CONNECT, &[]);
+        ask(&mut b, cmd::CONNECT, &[]);
+        assert!(a.state.player.starts_with("PLAYER") && a.state.player != b.state.player);
+        // A sells a card for 700.
+        let mut card = vec![9u8; CARD];
+        card[4] = 1;
+        card[5] = 4;
+        card[8..16].copy_from_slice(&random_hex(4).bytes().collect::<Vec<_>>()); // unique per run
+        a.set_cards(CardInfo::from([((1, 0x09090909), ("t.tester|tom tester".into(), 2))]));
+        let mut sell = vec![0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x02, 0xbc];
+        sell.extend(&card);
+        let key = u32_at(&ask(&mut a, cmd::MARKET_SELL, &sell), 5);
+        ask(&mut a, cmd::MARKET_SELL_CONFIRM, &key.to_be_bytes());
+        // B can't afford it, deposits Points, finds it by name and position and buys it.
+        let mut search = vec![0xffu8; 86];
+        search[..8].copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0x1e]);
+        search[8] = 1;
+        search[15] = 0;
+        search[16..36].copy_from_slice(&fixed(b"tester", 20));
+        search[36..86].copy_from_slice(&[0; 50]);
+        let mut wrong = search.clone();
+        wrong[13] = 1;
+        assert_eq!(ask(&mut b, cmd::MARKET_SEARCH, &wrong)[9], 0, "a reliever search doesn't find a closer");
+        search[13] = 2;
+        let found = ask(&mut b, cmd::MARKET_SEARCH, &search);
+        let n = found[9] as usize;
+        let rec = (0..n).map(|i| &found[10 + i * 93..10 + (i + 1) * 93]).find(|r| r[0x3a..0x3a + CARD] == card[..]).expect("listing visible");
+        assert_eq!(trim(&rec[4..54]), a.state.player.as_bytes());
+        let id = u32_at(rec, 0);
+        assert_eq!(error_text(&ask(&mut b, cmd::MARKET_BUY, &id.to_be_bytes())), "Not enough Net Points.");
+        let mut deposit = vec![2, 0, 0, 0x03, 0xe8, 0, 0, 0x27, 0x10];
+        deposit.extend([0; 8]);
+        assert_eq!(u32_at(&ask(&mut b, cmd::POINT_CHANGE, &deposit), 9), 1000);
+        let bought = ask(&mut b, cmd::MARKET_BUY, &id.to_be_bytes());
+        assert_eq!(bought[3], cmd::MARKET_BUY, "{}", error_text(&bought));
+        assert_eq!(u32_at(&bought, 13), 300);
+        // A can't take the sold card back; the proceeds arrive in A's market box.
+        assert_eq!(error_text(&ask(&mut a, cmd::MARKET_MY_CANCEL, &id.to_be_bytes())), "That card has already been sold.");
+        let boxed = ask(&mut a, cmd::MARKET_BOX_LIST, &[]);
+        assert!(boxed[5] >= 1);
+        let item = a.state.market_box.iter().find(|i| i.kind == 1 && i.amount == 700).expect("proceeds");
+        assert_eq!(trim(&item.text), b.state.player.as_bytes());
+        // B gifts A 50 Points; it shows up in A's mailbox once.
+        let mut gift = vec![0; 8];
+        gift.extend(fixed(a.state.player.as_bytes(), NAME));
+        gift.extend(50u32.to_be_bytes());
+        gift.extend([0; CARD]);
+        assert_eq!(ask(&mut b, cmd::MAIL_SEND, &gift)[3], cmd::MAIL_SEND);
+        ask(&mut a, cmd::MAIL_LIST, &[]);
+        ask(&mut a, cmd::MAIL_LIST, &[]);
+        assert_eq!(a.state.mail.iter().filter(|m| m.points == 50).count(), 1);
+        // Rankings answer from the shared boards (progress only counts after a player's first hour, so A isn't listed yet).
+        let mut stats = vec![];
+        for v in [0u32, 0, 0, 0, 0, 2, 10] { stats.extend(v.to_be_bytes()); }
+        ask(&mut a, cmd::RANK, &stats);
+        let r = ask(&mut b, cmd::RANK, &[0; 28]);
+        assert_eq!((r[3], r.len()), (cmd::RANK, 5 + 0x7a0));
     }
 
     #[test]

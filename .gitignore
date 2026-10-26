@@ -6,3 +6,5 @@ target/
 *.ipa
 xcuserdata/
 __pycache__/
+.wrangler/
+node_modules/

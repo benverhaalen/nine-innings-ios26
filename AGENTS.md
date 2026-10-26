@@ -31,9 +31,12 @@ Send the user to the latest release's `NineInnings26.ipa` and the README's *Side
 - Logs: `Documents/engine.log` in the app container. It includes fps, memory, offline decisions and unsupported calls, which are logged as `STOP …`.
 - Test hooks, off unless the environment variable is set (prefix with `SIMCTL_CHILD_` for `simctl launch`):
   - `RDD_AUTOTEST_DOWNLOAD=1`: taps **Download game** on launch (the download itself is always automatic).
-  - `RDD_AUTOTEST_TOUCHES=1`: the app runs `Documents/autotest-taps.txt` and then deletes it. Lines are `tap X Y`, `drag X1 Y1 X2 Y2` or `wait MS`, in the game's 800×480 coordinates.
+  - `RDD_AUTOTEST_TOUCHES=1`: the app runs `Documents/autotest-taps.txt` and then deletes it. Lines are `tap X Y`, `drag X1 Y1 X2 Y2` or `wait MS`, in the game's 800×480 coordinates. For the game's text fields (prices, names, seller IDs), `focus N` focuses field N (its handle is in `engine.log` as `text field N`), `type TEXT` fills it and `return` submits it; a `tap` on the field doesn't focus it.
 - Run heavy builds one at a time; the engine itself needs about 250 MB.
 - Online features: the game's TCP socket is routed to `runtime/src/game_server.rs` (XOR 0xB8 framing, state in `runtime-data/server-state.txt`). Unit tests: `rustc --edition 2021 --test runtime/src/game_server.rs -o /tmp/t && /tmp/t`. The Com2uS HIVE SDK (`HubBridge`) is emulated in `engine-startup.rs` with a local account in `runtime-data/hub-account.txt`.
+- Shared features (NetPoints, market, gifts, rankings) go over HTTPS to the Cloudflare Worker in `server/`. Its URL is `ONLINE_URL` in `game_server.rs`, overridden by the `NINE_INNINGS_SERVER` env var (`off` disables it). Deploy steps and abuse tests are in `server/README.md`. Keep money rules in the database constraints/transactions, and add an abuse test to `server/test.mjs` for every rule change.
+- Native text fields: `runtime/src/text_input.rs` (the game's `Uic*TextInput` calls) and `RDDTextField` in `ios-graphics.m`.
+- Market search by player name/position uses the player tables decrypted at launch from the user's APK (`runtime/src/card_tables.rs`; `engine.log` prints `card tables: N players`). Never write the decrypted tables or the key anywhere.
 - The shop is earn-only by design: real-money requests are declined, never faked as successful purchases.
 
 ## Rules

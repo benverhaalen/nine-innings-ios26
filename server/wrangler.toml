@@ -1,0 +1,38 @@
+# Shared online service for 9 Innings 2016 on iPhone. Deploy steps: server/README.md.
+name = "nine-innings"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nine-innings"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Daily housekeeping (old transaction records, finished listings).
+[triggers]
+crons = ["17 3 * * *"]
+
+# Per network (IPv4 address or IPv6 /64), checked before anything else: 120 requests a minute.
+[[ratelimits]]
+name = "RL_ADDR"
+namespace_id = "9003"
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+# Per signed-in player: 60 requests a minute. A game session makes a few.
+[[ratelimits]]
+name = "RL_PLAYER"
+namespace_id = "9001"
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
+# New player IDs: 3 a minute per address.
+[[ratelimits]]
+name = "RL_REGISTER"
+namespace_id = "9002"
+  [ratelimits.simple]
+  limit = 3
+  period = 60

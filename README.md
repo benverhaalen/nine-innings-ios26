@@ -71,7 +71,17 @@ Don't have SideStore yet? [iloader](https://github.com/nab138/iloader) (2.4.0 or
 ## What works
 
 - Offline play: setup, team selection, main menu, game modes and Friendly-match gameplay are verified (screenshots above). League, Special and Home Run modes use the same engine and are expected to work, but haven't been checked one by one yet. Saves persist on the device.
-- Online features run against a replacement server built into the app (`runtime/src/game_server.rs`), because Com2uS shut the real ones down. Verified in the app: HIVE login (automatic, local account), daily login bonus, Mailbox and Tradebox, the Store with Stars and Points you earn, star items (e.g. storage expansion), Card Market search, and Online Ranking. Market selling and buying are unit-tested on the server but not yet driven through the app.
+- Online features run against replacement servers, because Com2uS shut the real ones down:
+  - A server built into the app (`runtime/src/game_server.rs`) handles your own account: HIVE login (automatic, local account), daily login bonus, Mailbox and Tradebox, the Store with Stars and Points you earn, and star items.
+  - A shared server ([server/](server/), a free Cloudflare Worker) handles what involves other players: NetPoints, the Card Market, gifts and Online Ranking. Everyone who installs this app trades on the same market.
+  - Checked in the app, against a local copy of the shared server:
+    - registering a card for sale
+    - searching by team, league, rating, level, position, price order, player name and seller ID
+    - buying a card
+    - collecting sale proceeds from the Trading Box
+    - exchanging Points for NetPoints
+    - receiving a gift
+  - Without internet, the shared features say so and everything else keeps working.
 - The shop is **earn-only**: real-money packs answer "Purchases are disabled. Earn Stars and Points by playing."
 - Performance: the engine runs at its native 20 updates per second (its own 50 ms timer).
 - Not implemented yet: sound.
@@ -80,7 +90,24 @@ Don't have SideStore yet? [iloader](https://github.com/nab138/iloader) (2.4.0 or
 
 This is a revival, not the original service. Read this before expecting the 2016 experience:
 
-- **No other players.** The replacement server runs inside your app. The Card Market, gifting and rankings only know you: the market shows "No card was found", gifts can only go to yourself, and you're always #1. A shared online server would fix this; none is running.
+- **The shared server isn't live yet.** Its code is here and tested against a local copy, but it hasn't been deployed. Until then the Card Market, NetPoints, gifts and rankings say they're unavailable; everything else works.
+- **A small, volunteer-run shared server.** The Card Market, gifts and rankings run on one free Cloudflare Worker ([server/](server/)). It has a daily free quota of about 100,000 requests. If that is used up, online features say they're unavailable until the next day (UTC); it never costs anyone money. It has no uptime guarantee, and if it's ever shut down, those features stop working. Anyone can deploy their own copy.
+- **Cheating can't be fully prevented.** As in the original game, your Stars, Points, cards and stats live on your phone. The server can't check them, so a modified app could list cards or report stats it never earned. The server limits how much of that can reach other players:
+  - NetPoints are held only on the server.
+  - Point deposits are capped at 30,000 a day, and gifts at 10 and 30,000 Points a day.
+  - Each player can have at most 20 listings.
+  - Each purchase, exchange and gift is applied exactly once.
+  - Ranking progress can only grow at a believable hourly rate.
+  - New IDs and requests are rate-limited.
+
+  What it can't do is prove that a card on the market was earned honestly.
+- **Market differences.**
+  - The cheerleader search filter is ignored, so cheerleader searches show all cheerleaders.
+  - Unsold cards return after 10 days.
+  - Legend cards can't be sold or given, as in the original.
+  - Player-name search matches the names in your own copy of the game's player tables, so a listing made by a modified app may have no name and only show up in unfiltered searches.
+- **Rankings start fresh.** Only progress made after you first connect counts, it's counted at a limited rate per hour, and you won't appear on the boards during your first hour. Boards refresh every 30 minutes.
+- **Your market identity is tied to this install.** The shared server knows you by a random secret stored with your save. If you delete the app, you lose your NetPoints and your listings. Player names are assigned (e.g. `PLAYER12345`).
 - **No real-money purchases.** Star and point packs are declined. Earn Stars and Points by playing.
 - **Guessed economy.** The original star-item prices and daily-bonus rewards aren't documented anywhere we could find, so they're reasonable stand-ins. Store tiles can show a different star price from the confirmation dialog; the dialog's price is what you pay.
 - **Fake HIVE account.** The account is created on the device. There's no cloud save and no cross-device login; your save lives only on this iPhone. Deleting the app deletes it.
@@ -106,7 +133,8 @@ This is a revival, not the original service. Read this before expecting the 2016
 ```
 runtime/ios-graphics.m       UIKit host: rendering, touch, text, first-launch download/import
 runtime/src/bin/engine-startup.rs   loads libgame.so from the APK and runs it; fake JNI/Android
-runtime/src/game_server.rs   replacement game server (local, earn-only) and saved server state
+runtime/src/game_server.rs   replacement game server (local, earn-only), saved server state, client for the shared server
+server/                      shared online service (Cloudflare Worker + D1): market, NetPoints, gifts, rankings
 runtime/src/apk.rs           reads assets, JNI method list and string resources from the APK at launch
 runtime/src/dalvik.rs        tiny Dalvik interpreter for the game's two Java text-layout methods
 vendor/touchhle-arm-interpreter   ARMv7 interpreter (from touchHLE, MPL-2.0)

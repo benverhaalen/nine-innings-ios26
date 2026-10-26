@@ -271,8 +271,14 @@ static void queueTouch(int32_t type,CGPoint point,int32_t count){CGFloat scale=M
 int rdd_next_touch(int32_t *values){pthread_mutex_lock(&touchMutex);bool available=touchRead!=touchWrite;if(available)memcpy(values,touchQueue[touchRead++%256],sizeof(touchQueue[0]));pthread_mutex_unlock(&touchMutex);return available?1:0;}
 @interface RDDGameView:UIImageView
 @end
+@interface RDDTextField:UITextField<UITextFieldDelegate>
+@property int32_t handle;@property int32_t maxLength;@property CGRect gameFrame;
+- (void)changed;- (void)done;
+@end
+static NSMutableDictionary<NSNumber*,RDDTextField*> *textFields;
 // Test hook (RDD_AUTOTEST_TOUCHES=1): runs Documents/autotest-taps.txt, then deletes it.
-// Lines, in 800x480 game coordinates: "tap X Y", "drag X1 Y1 X2 Y2", "wait MS".
+// Lines, in 800x480 game coordinates: "tap X Y", "drag X1 Y1 X2 Y2", "wait MS"; "focus N" focuses text
+// field N as a finger tap would, "type TEXT" fills the focused field and "return" submits it.
 static void queueGameTouch(int32_t type,int32_t x,int32_t y){pthread_mutex_lock(&touchMutex);if(touchWrite-touchRead<256){int32_t *e=touchQueue[touchWrite++%256];e[0]=type;e[1]=x;e[2]=y;e[3]=1;}pthread_mutex_unlock(&touchMutex);}
 static void RDDStartTouchScript(void){if(!getenv("RDD_AUTOTEST_TOUCHES"))return;
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{NSString *path=[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject stringByAppendingPathComponent:@"autotest-taps.txt"];
@@ -281,6 +287,8 @@ static void RDDStartTouchScript(void){if(!getenv("RDD_AUTOTEST_TOUCHES"))return;
     if([f[0] isEqualToString:@"wait"]&&f.count>1)usleep(f[1].intValue*1000);
     else if([f[0] isEqualToString:@"tap"]&&f.count>2){queueGameTouch(0x80000001,f[1].intValue,f[2].intValue);usleep(80000);queueGameTouch(0x80000003,f[1].intValue,f[2].intValue);usleep(150000);}
     else if([f[0] isEqualToString:@"drag"]&&f.count>4){int x1=f[1].intValue,y1=f[2].intValue,x2=f[3].intValue,y2=f[4].intValue;queueGameTouch(0x80000001,x1,y1);for(int k=1;k<=10;k++){usleep(30000);queueGameTouch(0x80000002,x1+(x2-x1)*k/10,y1+(y2-y1)*k/10);}queueGameTouch(0x80000003,x2,y2);usleep(150000);}
+    else if([f[0] isEqualToString:@"focus"]&&f.count>1){int32_t handle=f[1].intValue;dispatch_sync(dispatch_get_main_queue(),^{[textFields[@(handle)] becomeFirstResponder];});}
+    else if([f[0] isEqualToString:@"type"]||[f[0] isEqualToString:@"return"]){NSString *typed=f.count>1?[line substringFromIndex:5]:@"";BOOL submit=[f[0] isEqualToString:@"return"];dispatch_sync(dispatch_get_main_queue(),^{for(RDDTextField *field in textFields.allValues)if(field.isFirstResponder){if(submit)[field done];else{field.text=typed;[field changed];}}});}
     fprintf(stderr,"autotest touch: %s\n",line.UTF8String);}}});}
 @implementation RDDGameView
 - (void)layoutSubviews{[super layoutSubviews];if(displayLayer){displayLayer.frame=self.bounds;atomic_store(&displayPixelWidth,lroundf(self.bounds.size.width*displayLayer.contentsScale));atomic_store(&displayPixelHeight,lroundf(self.bounds.size.height*displayLayer.contentsScale));}}
@@ -289,6 +297,42 @@ static void RDDStartTouchScript(void){if(!getenv("RDD_AUTOTEST_TOUCHES"))return;
 - (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event{if(touching){queueTouch(0x80000003,[touches.anyObject locationInView:self],1);touching=false;}}
 - (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event{[self touchesEnded:touches withEvent:event];}
 @end
+// ---- Native text fields (WrapperJinterface.Uic*TextInput) -------------------
+// The game asks for text boxes (Points exchange, card prices, searches) the way the Android activity provided
+// them: a frame in display pixels plus properties. Each becomes a UITextField over the game view; what the player
+// does is queued as nativeUserInput messages: 0 focus gained, 1 focus lost, 2 text changed, 3 return key.
+static NSMutableArray *textEvents;static pthread_mutex_t textMutex=PTHREAD_MUTEX_INITIALIZER;static CGFloat keyboardTop=CGFLOAT_MAX;
+static void queueTextEvent(int32_t handle,int32_t message,NSString *text){pthread_mutex_lock(&textMutex);if(!textEvents)textEvents=[NSMutableArray array];[textEvents addObject:@[@(handle),@(message),text?:@""]];pthread_mutex_unlock(&textMutex);}
+long rdd_next_text_event(int32_t *values,uint8_t *out,size_t capacity){pthread_mutex_lock(&textMutex);NSArray *event=textEvents.firstObject;if(event)[textEvents removeObjectAtIndex:0];pthread_mutex_unlock(&textMutex);if(!event)return -1;
+ values[0]=[event[0] intValue];values[1]=[event[1] intValue];NSData *data=[event[2] dataUsingEncoding:NSUTF8StringEncoding];size_t n=MIN((size_t)data.length,capacity);memcpy(out,data.bytes,n);return (long)n;}
+static UIColor *argbColor(int32_t v){return [UIColor colorWithRed:((v>>16)&255)/255. green:((v>>8)&255)/255. blue:(v&255)/255. alpha:((uint32_t)v>>24)/255.];}
+// Keeps a focused field above the keyboard, as Android pans the window.
+static void placeTextField(RDDTextField *field){CGRect frame=field.gameFrame;if(field.isFirstResponder&&keyboardTop<CGFLOAT_MAX){CGFloat bottom=[gameView convertPoint:CGPointMake(0,CGRectGetMaxY(frame)) toView:nil].y;if(bottom>keyboardTop-8)frame.origin.y-=bottom-(keyboardTop-8);}field.frame=frame;}
+@implementation RDDTextField
+- (void)textFieldDidBeginEditing:(UITextField*)field{placeTextField(self);queueTextEvent(self.handle,0,field.text);}
+- (void)textFieldDidEndEditing:(UITextField*)field{placeTextField(self);queueTextEvent(self.handle,1,field.text);}
+- (void)changed{queueTextEvent(self.handle,2,self.text);}
+- (BOOL)textFieldShouldReturn:(UITextField*)field{queueTextEvent(self.handle,3,field.text);[field resignFirstResponder];return NO;}
+- (void)done{[self textFieldShouldReturn:self];}
+- (BOOL)textField:(UITextField*)field shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString*)string{return self.maxLength<=0||field.text.length-range.length+string.length<=(NSUInteger)self.maxLength;}
+@end
+void rdd_text_field(int32_t handle,int32_t alive,const int32_t *props,const uint8_t *text,size_t textLength,const uint8_t *placeholder,size_t placeholderLength){@autoreleasepool{
+ struct{int32_t v[17];} q={{0}};if(alive)memcpy(q.v,props,sizeof(q.v));NSString *value=alive?[[NSString alloc] initWithBytes:text length:textLength encoding:NSUTF8StringEncoding]:nil,*hint=alive?[[NSString alloc] initWithBytes:placeholder length:placeholderLength encoding:NSUTF8StringEncoding]:nil;
+ dispatch_async(dispatch_get_main_queue(),^{if(!gameView)return;if(!textFields){textFields=[NSMutableDictionary dictionary];
+   [NSNotificationCenter.defaultCenter addObserverForName:UIKeyboardWillChangeFrameNotification object:nil queue:nil usingBlock:^(NSNotification *n){CGRect end=[n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];keyboardTop=CGRectGetMinY(end)>=UIScreen.mainScreen.bounds.size.height?CGFLOAT_MAX:CGRectGetMinY(end);for(RDDTextField *f in textFields.allValues)placeTextField(f);}];}
+  const int32_t *p=q.v;RDDTextField *field=textFields[@(handle)];
+  if(!alive){[field resignFirstResponder];[field removeFromSuperview];[textFields removeObjectForKey:@(handle)];return;}
+  if(!field){field=[[RDDTextField alloc] initWithFrame:CGRectZero];field.handle=handle;field.delegate=field;field.borderStyle=UITextBorderStyleNone;field.autocorrectionType=UITextAutocorrectionTypeNo;field.spellCheckingType=UITextSpellCheckingTypeNo;[field addTarget:field action:@selector(changed) forControlEvents:UIControlEventEditingChanged];
+   UIToolbar *bar=[[UIToolbar alloc] initWithFrame:CGRectMake(0,0,320,44)];bar.items=@[[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil],[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:field action:@selector(done)]];[bar sizeToFit];field.inputAccessoryView=bar;
+   [gameView addSubview:field];textFields[@(handle)]=field;}
+  CGFloat scale=MIN(gameView.bounds.size.width/800.,gameView.bounds.size.height/480.),left=(gameView.bounds.size.width-800*scale)/2,top=(gameView.bounds.size.height-480*scale)/2;CGFloat dw=p[4]>0?p[4]:800,dh=p[5]>0?p[5]:480;
+  field.gameFrame=CGRectMake(left+p[0]*800./dw*scale,top+p[1]*480./dh*scale,MAX(p[2]*800./dw*scale,40),MAX(p[3]*480./dh*scale,24));
+  const UIKeyboardType keyboards[]={UIKeyboardTypeDefault,UIKeyboardTypeURL,UIKeyboardTypeEmailAddress,UIKeyboardTypeNumberPad};field.keyboardType=p[6]>=0&&p[6]<=3?keyboards[p[6]]:UIKeyboardTypeDefault;field.secureTextEntry=p[7]!=0;field.maxLength=p[8];
+  field.autocapitalizationType=UITextAutocapitalizationTypeNone;field.textColor=argbColor(p[10]);field.backgroundColor=argbColor(p[11]);field.font=[UIFont systemFontOfSize:MAX(12,field.gameFrame.size.height*0.6)];
+  field.textAlignment=p[13]==2?NSTextAlignmentCenter:p[13]==4?NSTextAlignmentRight:NSTextAlignmentLeft;field.contentVerticalAlignment=p[14]==0?UIControlContentVerticalAlignmentTop:p[14]==1?UIControlContentVerticalAlignmentBottom:UIControlContentVerticalAlignmentCenter;
+  const UIReturnKeyType returns[]={UIReturnKeyGo,UIReturnKeyDone,UIReturnKeySearch,UIReturnKeySend,UIReturnKeyNext};field.returnKeyType=p[16]>=0&&p[16]<=4?returns[p[16]]:UIReturnKeyDone;
+  if(![field.text isEqualToString:value])field.text=value;field.placeholder=hint;placeTextField(field);
+  if(p[9]&&!field.isFirstResponder)[field becomeFirstResponder];else if(!p[9]&&field.isFirstResponder)[field resignFirstResponder];});}}
 @interface RDDGameController:UIViewController
 @end
 @implementation RDDGameController
@@ -525,6 +569,16 @@ int rdd_application_main(void){@autoreleasepool{char *args[]={"NineInnings",NULL
 int rdd_bundle_path(char *out,size_t capacity){const char *path=NSBundle.mainBundle.bundlePath.UTF8String;size_t n=strlen(path);if(n+1>capacity)return -1;memcpy(out,path,n+1);return (int)n;}
 
 static UIView *progressOverlay;
+// One POST to the shared online server, waited for on the engine thread (10 s at most). Returns the
+// reply's length, or -1 when the server can't be reached. No cookies or cache.
+long rdd_http_post(const char *url,const unsigned char *body,size_t length,unsigned char *out,size_t capacity){@autoreleasepool{
+ static NSURLSession *session;static dispatch_once_t once;dispatch_once(&once,^{NSURLSessionConfiguration *c=NSURLSessionConfiguration.ephemeralSessionConfiguration;c.timeoutIntervalForRequest=8;c.timeoutIntervalForResource=10;session=[NSURLSession sessionWithConfiguration:c];});
+ NSURL *address=[NSURL URLWithString:[NSString stringWithUTF8String:url]];if(!address)return -1;
+ NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:address];request.HTTPMethod=@"POST";request.HTTPBody=[NSData dataWithBytes:body length:length];[request setValue:@"text/plain" forHTTPHeaderField:@"Content-Type"];
+ __block NSData *reply=nil;dispatch_semaphore_t done=dispatch_semaphore_create(0);
+ [[session dataTaskWithRequest:request completionHandler:^(NSData *data,NSURLResponse *response,NSError *error){if(!error)reply=data;dispatch_semaphore_signal(done);}] resume];
+ if(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC))!=0||!reply)return -1;
+ size_t n=MIN((size_t)reply.length,capacity);memcpy(out,reply.bytes,n);return (long)n;}}
 void rdd_progress(const unsigned char *message,size_t length,int show){@autoreleasepool{NSString *text=show?[[NSString alloc] initWithBytes:message length:length encoding:NSUTF8StringEncoding]:nil;dispatch_async(dispatch_get_main_queue(),^{[progressOverlay removeFromSuperview];progressOverlay=nil;if(!show||!gameView)return;UIView *overlay=[[UIView alloc] initWithFrame:gameView.bounds];overlay.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;overlay.backgroundColor=[UIColor colorWithWhite:0 alpha:0.4];UIView *panel=[[UIView alloc] initWithFrame:CGRectMake((overlay.bounds.size.width-300)/2,(overlay.bounds.size.height-76)/2,300,76)];panel.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin|UIViewAutoresizingFlexibleRightMargin|UIViewAutoresizingFlexibleTopMargin|UIViewAutoresizingFlexibleBottomMargin;panel.backgroundColor=UIColor.whiteColor;panel.layer.cornerRadius=8;UIActivityIndicatorView *spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];spinner.center=CGPointMake(30,38);[spinner startAnimating];[panel addSubview:spinner];UILabel *label=[[UILabel alloc] initWithFrame:CGRectMake(58,8,232,60)];label.text=text;label.numberOfLines=2;label.textColor=UIColor.blackColor;label.font=[UIFont systemFontOfSize:16];[panel addSubview:label];[overlay addSubview:panel];[gameView.superview addSubview:overlay];progressOverlay=overlay;});}}
 
 int rdd_text_metrics(const char *fontpath,double size,int32_t *metrics){@autoreleasepool{CTFontRef font=rdd_copy_font(fontpath,size);if(!font)return -1;CGRect bounds=CTFontGetBoundingBox(font);metrics[0]=(int32_t)floor(-CGRectGetMaxY(bounds));metrics[1]=(int32_t)round(-CTFontGetAscent(font));metrics[2]=(int32_t)round(CTFontGetDescent(font));CFRelease(font);return 0;}}
