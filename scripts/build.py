@@ -98,28 +98,16 @@ def info_plist(bundle_id, platform):
     }
 
 
-def apk_icon(apk, out):
-    """The game's own launcher icon, read from the user's APK at build time (never stored in the repo).
-    The APK's largest icon is 96 px with a soft 2 px edge; crop the edge and let sips scale it to each iOS size."""
-    with zipfile.ZipFile(apk) as z:
-        name = max((n for n in z.namelist() if re.fullmatch(r"res/drawable-\w*dpi/icon\.png", n)), key=lambda n: z.getinfo(n).file_size)
-        src = out / "apk-icon.png"
-        src.write_bytes(z.read(name))
-    run(["sips", "-c", "92", "92", str(src)], capture_output=True)
-    return src
-
-
-def assemble(executable, bundle_id, platform, apk=None, icon_apk=None, icon=None):
+def assemble(executable, bundle_id, platform, apk=None, icon=None):
     app = BUILD / platform / f"{APP_NAME}.app"
     shutil.rmtree(app, ignore_errors=True)
     app.mkdir(parents=True)
     shutil.copy2(executable, app / APP_NAME)
     shutil.copytree(ROOT / "resources" / "fonts", app / "fonts", ignore=shutil.ignore_patterns("NOTICE"))
     icons = ROOT / "resources" / "icon"
-    original = Path(icon).expanduser() if icon else apk_icon(icon_apk or apk, app.parent) if (icon_apk or apk) else None
     for name, size in [("AppIcon60x60@2x.png", 120), ("AppIcon60x60@3x.png", 180), ("AppIcon76x76@2x~ipad.png", 152), ("AppIcon76x76~ipad.png", 76)]:
-        if original:
-            run(["sips", "-z", str(size), str(size), str(original), "--out", str(app / name)], capture_output=True)
+        if icon:
+            run(["sips", "-z", str(size), str(size), str(Path(icon).expanduser()), "--out", str(app / name)], capture_output=True)
         else:
             shutil.copy2(icons / f"AppIcon-{size}.png", app / name)
     (app / "Info.plist").write_bytes(plistlib.dumps(info_plist(bundle_id, platform)))
@@ -127,7 +115,7 @@ def assemble(executable, bundle_id, platform, apk=None, icon_apk=None, icon=None
     (app / "supported-apks.json").write_text((ROOT / "supported-apks.json").read_text())
     if apk:
         shutil.copy2(apk, app / "original.apk")  # adopted into Documents on first launch
-    elif not (icon_apk or icon):
+    else:
         audit(app)
     return app
 
@@ -216,7 +204,7 @@ def cmd_device(a):
     chosen = next((d for d in found if a.device in (d["identifier"], d["hardwareProperties"].get("udid"))), None) if a.device else (found[0] if found else None)
     if not chosen:
         sys.exit("No iPhone found. Connect it with a cable, unlock it and tap 'Trust This Computer'.")
-    app = assemble(cargo("aarch64-apple-ios"), bundle_id, "iPhoneOS", apk, a.icon_from and check_apk(a.icon_from), a.icon)
+    app = assemble(cargo("aarch64-apple-ios"), bundle_id, "iPhoneOS", apk, a.icon)
     profile, entitlements = provision(team, bundle_id, chosen["hardwareProperties"]["udid"])
     shutil.copy2(profile, app / "embedded.mobileprovision")
     run(["codesign", "--force", "--sign", signing_identity(team), "--entitlements", str(entitlements), "--timestamp=none", "--generate-entitlement-der", str(app)])
@@ -231,7 +219,7 @@ def cmd_device(a):
 def cmd_simulator(a):
     apk = resolve_apk(a)
     bundle_id = a.bundle_id or "io.github.nineinnings.ios26"
-    app = assemble(cargo("aarch64-apple-ios-sim"), bundle_id, "iPhoneSimulator", apk, a.icon_from and check_apk(a.icon_from), a.icon)
+    app = assemble(cargo("aarch64-apple-ios-sim"), bundle_id, "iPhoneSimulator", apk, a.icon)
     run(["codesign", "--force", "--sign", "-", str(app)])
     run(["xcrun", "simctl", "install", "booted", str(app)])
     run(["xcrun", "simctl", "launch", "booted", bundle_id])
@@ -264,8 +252,7 @@ def main():
     p.add_argument("command", choices=["doctor", "ipa", "device", "simulator"])
     p.add_argument("--apk", help="personal builds: bundle this APK (verified) so no download is needed")
     p.add_argument("--apk-url", help="download the APK from this URL (hash-verified) instead")
-    p.add_argument("--icon-from", help="personal builds: use the original game icon from this APK (verified; the APK itself isn't bundled)")
-    p.add_argument("--icon", help="personal builds: use this square PNG as the app icon (e.g. a higher-resolution copy of the original)")
+    p.add_argument("--icon", help="use this square PNG as the app icon instead of resources/icon")
     p.add_argument("--team", help="Apple developer team ID (default: from your Apple Development certificate)")
     p.add_argument("--bundle-id", help="override the app's bundle identifier")
     p.add_argument("--device", help="device identifier from `xcrun devicectl list devices`")

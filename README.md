@@ -41,8 +41,6 @@ python3 scripts/build.py doctor     # checks Xcode, Rust, your Apple ID and the 
 python3 scripts/build.py device     # builds, signs with your Apple ID and installs on the connected iPhone
 ```
 
-Optional: `--icon-from /path/to/the.apk` uses the game's original icon from your APK, or `--icon icon.png` uses any square PNG. The icon only goes into your own build, never into this repo.
-
 First time only: install Xcode (App Store) and Rust (`curl https://sh.rustup.rs -sSf | sh`, then `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`). Sign in to Xcode with your Apple ID (Settings → Accounts). Connect the iPhone by cable, unlock it and tap *Trust*.
 
 On the iPhone, trust your Apple ID (Settings → General → VPN & Device Management) and enable Developer Mode if asked. Then open **9 Innings** and tap **Download game**.
@@ -102,4 +100,4 @@ scripts/build.py             doctor / ipa / device / simulator
 
 ## Legal
 
-*9 Innings* and all of its content belong to Com2uS. This project contains none of it. It is an independent compatibility layer that runs a copy of the game you download yourself. It is not affiliated with or endorsed by Com2uS, MLB or the MLBPA. Code: MIT ([LICENSE](LICENSE)); third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+*9 Innings* and all of its content belong to Com2uS. Apart from the app icon (the game's own icon, used to identify it), this project contains none of it. It is an independent compatibility layer that runs a copy of the game you download yourself. It is not affiliated with or endorsed by Com2uS, MLB or the MLBPA. Code: MIT ([LICENSE](LICENSE)); third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
